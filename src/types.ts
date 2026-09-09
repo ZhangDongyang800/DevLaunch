@@ -41,6 +41,8 @@ export interface AppConfig {
   projects: Project[]
 }
 
+export type ToastKind = 'ok' | 'err'
+
 export function newId(): string {
   return crypto.randomUUID()
 }

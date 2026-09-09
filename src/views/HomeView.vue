@@ -1,19 +1,35 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { config } from '../store'
-import { newId } from '../types'
+import { newId, type Project, type ReadyCondition, type Step } from '../types'
 import { launchProject, openDir } from '../api'
 
-const emit = defineEmits<{ edit: [projectId: string]; notify: [msg: string] }>()
+const emit = defineEmits<{ edit: [projectId: string]; notify: [msg: string, kind?: 'ok' | 'err'] }>()
 
 const projects = computed(() => config.value?.projects ?? [])
+
+function projectSteps(p: Project): Step[] {
+  return p.groups.flatMap((g) => g.steps)
+}
+
+function stepLabel(s: Step): string {
+  const cmd = s.command.trim().split(/\s+/)[0] || ''
+  return (s.name || cmd || '未命名').trim()
+}
+
+function gateText(c: ReadyCondition): string | null {
+  if (c.type === 'delay') return `⏳ ${c.seconds}s`
+  if (c.type === 'port') return `⏳ 端口 ${c.port}`
+  if (c.type === 'process') return `⏳ ${c.processName || '进程'}`
+  return null
+}
 
 async function launch(id: string) {
   try {
     await launchProject(id)
     emit('notify', '已开始启动…')
   } catch (e) {
-    emit('notify', `启动失败：${e}`)
+    emit('notify', `启动失败：${e}`, 'err')
   }
 }
 
@@ -21,29 +37,61 @@ async function open(path: string) {
   try {
     await openDir(path)
   } catch (e) {
-    emit('notify', `${e}`)
+    emit('notify', `${e}`, 'err')
   }
+}
+
+function createProject() {
+  if (!config.value) return
+  config.value.projects.push({ id: newId(), name: '新项目', rootDir: '', groups: [] })
+  emit('edit', config.value.projects[config.value.projects.length - 1].id)
 }
 </script>
 
 <template>
   <div class="home">
-    <h1>项目</h1>
-    <p v-if="projects.length === 0" class="empty">还没有项目。点击右上角「新建项目」开始配置。</p>
-    <div v-for="p in projects" :key="p.id" class="project-row">
-      <span class="name">{{ p.name }}</span>
-      <span class="actions">
-        <button class="primary" @click="launch(p.id)">启动</button>
-        <button @click="open(p.rootDir)">打开目录</button>
-        <button @click="emit('edit', p.id)">编辑</button>
-      </span>
+    <div class="home-head">
+      <h1>项目</h1>
+      <span class="home-count mono">{{ projects.length }} 个</span>
     </div>
-    <button
-      v-if="config"
-      class="primary add"
-      @click="config.projects.push({ id: newId(), name: '新项目', rootDir: '', groups: [] }); emit('edit', config.projects[config.projects.length - 1].id)"
+
+    <div v-if="projects.length === 0" class="empty-state">
+      <div class="empty-title">还没有项目</div>
+      <div class="empty-sub">配置一次项目路径和命令，以后一键启动全部终端</div>
+      <button class="primary" @click="createProject">+ 新建项目</button>
+    </div>
+
+    <div
+      v-for="p in projects"
+      :key="p.id"
+      class="project-card"
+      role="button"
+      tabindex="0"
+      title="点击启动"
+      @click="launch(p.id)"
+      @keydown.enter="launch(p.id)"
     >
-      新建项目
-    </button>
+      <button class="launch-btn" title="启动" @click.stop="launch(p.id)">▶</button>
+
+      <div class="pc-info">
+        <span class="pc-name">{{ p.name || '未命名项目' }}</span>
+        <span class="pc-path mono">{{ p.rootDir || '未设置根目录' }}</span>
+        <div class="pc-pipeline">
+          <template v-for="(s, i) in projectSteps(p)" :key="s.id">
+            <span v-if="i > 0" class="pc-arrow">→</span>
+            <span class="chip" :title="s.command">{{ stepLabel(s) }}</span>
+            <span v-if="i < projectSteps(p).length - 1 && gateText(s.readyCondition)" class="chip gate">
+              {{ gateText(s.readyCondition) }}
+            </span>
+          </template>
+          <span v-if="projectSteps(p).length === 0" class="chip none">未配置步骤</span>
+        </div>
+      </div>
+
+      <div class="pc-side">
+        <button @click.stop="open(p.rootDir)">打开目录</button>
+        <button @click.stop="emit('edit', p.id)">编辑</button>
+      </div>
+    </div>
   </div>
 </template>
