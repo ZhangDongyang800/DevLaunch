@@ -203,6 +203,13 @@ button.accent:hover { background: var(--signal-dim); }
 button.danger { color: var(--danger); }
 button.danger:hover { background: var(--danger-dim); }
 
+button.bordered.confirming,
+button.danger.confirming {
+  border-color: var(--danger);
+  background: var(--danger-dim);
+  color: var(--danger);
+}
+
 button.ghost {
   background: transparent;
   color: var(--muted);

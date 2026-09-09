@@ -18,6 +18,26 @@ function toggleAdvanced(id: string) {
   expanded.value = next
 }
 
+const confirmDelete = ref(false)
+let confirmTimer: number | undefined
+
+function removeProject() {
+  if (!confirmDelete.value) {
+    confirmDelete.value = true
+    clearTimeout(confirmTimer)
+    confirmTimer = window.setTimeout(() => (confirmDelete.value = false), 3000)
+    return
+  }
+  clearTimeout(confirmTimer)
+  confirmDelete.value = false
+  const cfg = config.value!
+  cfg.projects = cfg.projects.filter((p) => p.id !== props.projectId)
+  persist()
+    .then(() => emit('notify', '项目已删除'))
+    .catch((e) => emit('notify', `删除失败：${e}`, 'err'))
+  emit('back')
+}
+
 async function save() {
   try {
     await persist()
@@ -93,6 +113,9 @@ async function browseRoot() {
     <div class="editor-head">
       <button class="ghost" @click="emit('back')">← 返回</button>
       <input v-model="project.name" class="editor-title grow" placeholder="项目名称" />
+      <button class="danger bordered" :class="{ confirming: confirmDelete }" @click="removeProject">
+        {{ confirmDelete ? '确认删除？' : '删除项目' }}
+      </button>
       <button class="primary" @click="save">保存</button>
     </div>
 

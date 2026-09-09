@@ -52,7 +52,10 @@ function createProject() {
   <div class="home">
     <div class="home-head">
       <h1>启动台</h1>
-      <span class="home-count mono">{{ projects.length }} PROJECTS</span>
+      <span class="row">
+        <span class="home-count mono">{{ projects.length }} PROJECTS</span>
+        <button class="bordered" @click="createProject">+ 新建项目</button>
+      </span>
     </div>
 
     <div v-if="projects.length === 0" class="empty-state">
