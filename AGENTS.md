@@ -42,7 +42,7 @@ src-tauri/src/
 1. **配置单一写者**：所有配置变更（前端保存、导入、托盘）都经 Rust `Mutex<AppConfig>`；前端是纯编辑器，绝不持有独立持久化状态。
 2. **save_config / import_config_from 成功后必须调 `tray::rebuild(app)`**，否则托盘菜单过期。
 3. **IPC 命令名与参数**在 `commands.rs`（Rust snake_case 命令名 + camelCase 参数）与 `src/api.ts` 必须逐字一致；Tauri 自动做 camelCase 转换，前端 invoke 参数用 camelCase。
-4. **前端插件调用需要 capability 权限**（`src-tauri/capabilities/default.json`）：缺权限**编译不报错、运行时才失败**。dialog 用了 `dialog:default`；自绘标题栏用了 `core:window:allow-minimize/hide/start-dragging`。
+4. **前端插件调用需要 capability 权限**（`src-tauri/capabilities/default.json`）：缺权限**编译不报错、运行时才失败**。dialog 用了 `dialog:default`；自绘标题栏用了 `core:window:allow-minimize/hide/start-dragging/is-maximized/maximize/unmaximize/toggle-maximize`（双击拖拽区最大化也依赖 toggle-maximize 权限）。
 5. **launch-result 事件**载荷是 `Option<String>`（err 侧）：null=成功，Some=错误。App.vue 监听并 toast。
 6. **就绪条件**是 serde tagged enum（`{"type":"port",...}`），TS 侧对应判别联合（`src/types.ts`）。字段：`seconds` / `port`+`host`+`timeoutSec` / `processName`+`timeoutSec`。**没有输出匹配**（有意砍掉，勿加）。
 7. **终端命令行用 `raw_arg` 整体拼接**（cmd /K、powershell -NoExit、wt -d 把剩余行当命令行解析）；cmd/powershell 加 `CREATE_NEW_CONSOLE`，wt 不加。cmd 的命令不能含嵌套双引号（已知限制）。
