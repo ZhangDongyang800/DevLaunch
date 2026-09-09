@@ -1,4 +1,5 @@
 pub mod config;
+pub mod launcher;
 pub mod platform;
 pub mod ready;
 
