@@ -26,8 +26,12 @@ async function toggleAutostart() {
 }
 
 async function saveTimeout() {
-  await persist()
-  emit('notify', '默认超时已保存')
+  try {
+    await persist()
+    emit('notify', '默认超时已保存')
+  } catch (e) {
+    emit('notify', `保存失败：${e}`)
+  }
 }
 
 async function doExport() {
