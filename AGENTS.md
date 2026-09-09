@@ -33,7 +33,7 @@ src-tauri/src/
 │   └── windows.rs # cmd/powershell/wt 三种；raw_arg 原样拼接命令行
 ├── ready.rs     # 同步轮询就绪：immediate/delay/port/process；timeout_sec==0 回退默认
 ├── launcher.rs  # 编排：组内顺序启动，每步后等就绪；任一步失败→通知+中断链
-├── commands.rs  # 10 个 IPC 命令（launch_* 在后台线程，完成 emit "launch-result" err 侧）
+├── commands.rs  # 11 个 IPC 命令（launch_* 在后台线程，完成 emit "launch-result" err 侧）
 ├── tray.rs      # 托盘菜单从配置构建；菜单 ID 约定 launch:<id>/open:<id>/show/quit
 └── lib.rs       # AppState{config: Mutex, path}；插件注册；关窗=hide 不退出
 ```
