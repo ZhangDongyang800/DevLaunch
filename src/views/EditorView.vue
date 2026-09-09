@@ -68,6 +68,10 @@ function gateText(c: ReadyCondition): string {
   return '立即'
 }
 
+function cmdRows(s: Step): number {
+  return Math.min(4, Math.max(1, s.command.split('\n').length))
+}
+
 const subdirs = ref<string[]>([])
 const openMenuFor = ref('')
 
@@ -159,7 +163,13 @@ async function browseRoot() {
 
           <div class="step-body">
             <div class="s-main">
-              <input v-model="s.command" class="cmd-input" placeholder="命令，如 npm run dev" />
+              <textarea
+                v-model="s.command"
+                class="cmd-input"
+                :rows="cmdRows(s)"
+                placeholder="命令，如 npm run dev（支持多行：同一终端窗口内顺序执行，如先 conda activate 再启动）"
+                spellcheck="false"
+              />
               <button class="run-step" title="单步运行" @click="tryRunStep(g, s)">▶ RUN</button>
             </div>
 
@@ -259,7 +269,7 @@ async function browseRoot() {
     </button>
 
     <p class="hint">
-      组内按顺序启动：上一步按"完成条件"等待后再启动下一步；组与组之间在首页逐组手动运行。就绪条件类型切换后请重新填写参数。
+      组内按顺序启动：上一步按"完成条件"等待后再启动下一步；组与组之间在首页逐组手动运行。命令支持多行，多行在同一终端窗口内按顺序执行（如先 conda activate 环境再启动）。就绪条件类型切换后请重新填写参数。
     </p>
   </div>
 </template>

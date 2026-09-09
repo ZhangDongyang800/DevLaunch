@@ -22,6 +22,9 @@ AppConfig
             ├── workDir        工作目录（可选；空=rootDir；相对路径相对 rootDir 解析）
             ├── terminal       cmd | powershell | windowsterminal（默认 cmd）
             ├── command        在终端里执行的命令（如 npm run dev / opencode）
+            ├── command        在终端里执行的命令（如 npm run dev / opencode）；支持多行，
+            │                  多行在同一终端窗口内按顺序执行（CMD 用 && 连接、PowerShell 用 ; 连接），
+            │                  用于"先 conda activate 再启动"等场景
             └── readyCondition 本步完成后、下一步启动前的就绪条件
 ```
 
@@ -38,7 +41,7 @@ AppConfig
 
 ## 3. 关键行为契约
 
-1. **终端是真实、可交互的**：每个步骤新开一个真实终端窗口（cmd 用 `/K`、PowerShell 用 `-NoExit`、wt 用 `-d`），命令执行完窗口保留，用户直接接管打字（AI CLI 工具如 opencode 可用）。命令报错时错误信息留在窗口内可见。
+1. **终端是真实、可交互的**：每个步骤新开一个真实终端窗口（cmd 用 `/K`、PowerShell 用 `-NoExit`、wt 用 `-d`），命令执行完窗口保留，用户直接接管打字（AI CLI 工具如 opencode 可用）。步骤命令可写多行，多行在同一终端窗口内顺序执行（先激活环境再启动服务等场景）。命令报错时错误信息留在窗口内可见。
 2. **执行顺序**：项目级「启动」= 依序执行所有组；组内步骤顺序执行，每步后按 `readyCondition` 等待再启动下一步；**组与组之间无自动等待逻辑**——用户可在首页/编辑器里逐组手动运行（先开数据库组，确认后手动点后端组）。
 3. **失败即中断**：任一步 spawn 失败、目录不存在、就绪超时 → 系统通知（含步骤名与原因）+ 停止后续启动；已打开的窗口不受影响。错误绝不静默吞掉。
 4. **配置单一写者**：所有配置变更（编辑器保存、导入、托盘）都经后端 `Mutex<AppConfig>` 写盘；前端是纯编辑器。写盘是原子的（temp+rename）；配置损坏时备份为 `*.json.corrupt-<时间戳>` 后回退空配置。

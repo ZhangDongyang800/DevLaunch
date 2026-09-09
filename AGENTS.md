@@ -46,7 +46,7 @@ src-tauri/src/
 4. **前端插件调用需要 capability 权限**（`src-tauri/capabilities/default.json`）：缺权限**编译不报错、运行时才失败**。dialog 用了 `dialog:default`；自绘标题栏用了 `core:window:allow-minimize/hide/start-dragging/is-maximized/maximize/unmaximize/toggle-maximize`（双击拖拽区最大化也依赖 toggle-maximize 权限）。
 5. **launch-result 事件**载荷是 `Option<String>`（err 侧）：null=成功，Some=错误。App.vue 监听并 toast。
 6. **就绪条件**是 serde tagged enum（`{"type":"port",...}`），TS 侧对应判别联合（`src/types.ts`）。字段：`seconds` / `port`+`host`+`timeoutSec` / `processName`+`timeoutSec`。**没有输出匹配**（有意砍掉，勿加）。
-7. **终端命令行用 `raw_arg` 整体拼接**（cmd /K、powershell -NoExit、wt -d 把剩余行当命令行解析）；cmd/powershell 加 `CREATE_NEW_CONSOLE`，wt 不加。cmd 的命令不能含嵌套双引号（已知限制）。
+7. **终端命令行用 `raw_arg` 整体拼接**（cmd /K、powershell -NoExit、wt -d 把剩余行当命令行解析）；cmd/powershell 加 `CREATE_NEW_CONSOLE`，wt 不加。cmd 的命令不能含嵌套双引号（已知限制）。**步骤命令支持多行**：按 `\n` 拆分、去空行，CMD/wt 用 `&&` 连接、PowerShell 用 `;` 连接（`platform/windows.rs::join_lines`），多行在同一终端窗口内顺序执行——"先 conda activate 再启动"就是靠这个。
 8. **无边框窗口**：`decorations:false`；拖拽靠 `data-tauri-drag-region`；`body{user-select:none}` 但 input 已恢复 `user-select:text`。
 
 ## Frontend conventions
