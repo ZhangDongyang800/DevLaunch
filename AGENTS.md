@@ -22,6 +22,7 @@ npm run tauri build    # release 构建（~4min）；产物 src-tauri/target/rel
 
 - Tauri 改 Rust 代码后 `tauri dev` 会重编译；改前端热更新。
 - 改了 capabilities/tauri.conf.json 后需要重新构建才生效。
+- **构建纪律：攒批构建，不要逐次构建。** `npm run tauri build` 每次 ~4min；一个会话内有多项改动时，先全部完成并用 `npm run build`（快，秒级）做类型/编译验收，最后统一跑一次 `tauri build`。只有"用户需要立即拿到可执行文件验证"时才允许中途构建。
 
 ## Architecture（非显而易见的部分）
 
