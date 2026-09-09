@@ -9,6 +9,9 @@ const emit = defineEmits<{ back: []; notify: [msg: string, kind?: 'ok' | 'err'] 
 
 const project = computed(() => config.value!.projects.find((p) => p.id === props.projectId)!)
 
+const savedSnapshot = ref(JSON.stringify(project.value))
+const dirty = computed(() => JSON.stringify(project.value) !== savedSnapshot.value)
+
 const expanded = ref(new Set<string>())
 
 function toggleAdvanced(id: string) {
@@ -18,29 +21,10 @@ function toggleAdvanced(id: string) {
   expanded.value = next
 }
 
-const confirmDelete = ref(false)
-let confirmTimer: number | undefined
-
-function removeProject() {
-  if (!confirmDelete.value) {
-    confirmDelete.value = true
-    clearTimeout(confirmTimer)
-    confirmTimer = window.setTimeout(() => (confirmDelete.value = false), 3000)
-    return
-  }
-  clearTimeout(confirmTimer)
-  confirmDelete.value = false
-  const cfg = config.value!
-  cfg.projects = cfg.projects.filter((p) => p.id !== props.projectId)
-  persist()
-    .then(() => emit('notify', '项目已删除'))
-    .catch((e) => emit('notify', `删除失败：${e}`, 'err'))
-  emit('back')
-}
-
 async function save() {
   try {
     await persist()
+    savedSnapshot.value = JSON.stringify(project.value)
     emit('notify', '已保存')
   } catch (e) {
     emit('notify', `保存失败：${e}`, 'err')
@@ -112,10 +96,8 @@ async function browseRoot() {
   <div class="editor" v-if="project">
     <div class="editor-head">
       <button class="ghost" @click="emit('back')">← 返回</button>
+      <span v-if="dirty" class="dirty-dot" title="有未保存的更改" />
       <input v-model="project.name" class="editor-title grow" placeholder="项目名称" />
-      <button class="danger bordered" :class="{ confirming: confirmDelete }" @click="removeProject">
-        {{ confirmDelete ? '确认删除？' : '删除项目' }}
-      </button>
       <button class="primary" @click="save">保存</button>
     </div>
 

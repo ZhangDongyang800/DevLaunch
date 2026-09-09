@@ -1,12 +1,31 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { config } from '../store'
+import { computed, ref } from 'vue'
+import { config, persist } from '../store'
 import { newId, type Project, type ReadyCondition, type Step } from '../types'
 import { launchProject, openDir } from '../api'
 
 const emit = defineEmits<{ edit: [projectId: string]; notify: [msg: string, kind?: 'ok' | 'err'] }>()
 
 const projects = computed(() => config.value?.projects ?? [])
+
+const confirmDeleteId = ref('')
+let confirmTimer: number | undefined
+
+function removeProject(id: string) {
+  if (confirmDeleteId.value !== id) {
+    confirmDeleteId.value = id
+    clearTimeout(confirmTimer)
+    confirmTimer = window.setTimeout(() => (confirmDeleteId.value = ''), 3000)
+    return
+  }
+  clearTimeout(confirmTimer)
+  confirmDeleteId.value = ''
+  if (!config.value) return
+  config.value.projects = config.value.projects.filter((p) => p.id !== id)
+  persist()
+    .then(() => emit('notify', '项目已删除'))
+    .catch((e) => emit('notify', `删除失败：${e}`, 'err'))
+}
 
 function projectSteps(p: Project): Step[] {
   return p.groups.flatMap((g) => g.steps)
@@ -98,6 +117,13 @@ function createProject() {
         <div class="pc-side">
           <button class="ghost" @click.stop="open(p.rootDir)">打开目录</button>
           <button class="ghost" @click.stop="emit('edit', p.id)">编辑</button>
+          <button
+            class="danger ghost"
+            :class="{ confirming: confirmDeleteId === p.id }"
+            @click.stop="removeProject(p.id)"
+          >
+            {{ confirmDeleteId === p.id ? '确认删除？' : '删除' }}
+          </button>
         </div>
       </div>
     </div>
