@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { config, persist } from '../store'
-import { launchGroup, runStep } from '../api'
+import { launchGroup, listSubdirs, runStep } from '../api'
 import { newGroup, newStep, type Group, type ReadyCondition, type Step } from '../types'
 
 const props = defineProps<{ projectId: string }>()
@@ -68,6 +68,41 @@ function gateText(c: ReadyCondition): string {
   return '立即'
 }
 
+const subdirs = ref<string[]>([])
+const openMenuFor = ref('')
+
+async function refreshSubdirs() {
+  const root = project.value?.rootDir
+  if (!root) {
+    subdirs.value = []
+    return
+  }
+  try {
+    subdirs.value = await listSubdirs(root)
+  } catch {
+    subdirs.value = []
+  }
+}
+
+function openCombo(stepId: string) {
+  openMenuFor.value = stepId
+  refreshSubdirs()
+}
+
+function closeCombo() {
+  openMenuFor.value = ''
+}
+
+function pickWorkDir(s: Step, dir: string) {
+  s.workDir = dir
+  closeCombo()
+}
+
+watch(
+  () => project.value?.rootDir,
+  () => refreshSubdirs()
+)
+
 async function tryRunStep(g: Group, s: Step) {
   try {
     await runStep(project.value.id, g.id, s.id)
@@ -130,7 +165,36 @@ async function browseRoot() {
 
             <div class="s-meta">
               <input class="inline" v-model="s.name" placeholder="名称" title="名称（可选）" />
-              <input class="inline" v-model="s.workDir" placeholder="子目录（留空=根目录）" title="工作目录" />
+              <div class="combo">
+                <input
+                  class="inline"
+                  v-model="s.workDir"
+                  placeholder="子目录（留空=根目录）"
+                  title="工作目录：从根目录下的子目录中选择，或手动输入相对路径"
+                  @focus="openCombo(s.id)"
+                  @blur="closeCombo"
+                  @keydown.esc="closeCombo"
+                />
+                <div v-if="openMenuFor === s.id" class="combo-menu">
+                  <div
+                    class="combo-item"
+                    :class="{ active: !s.workDir }"
+                    @mousedown.prevent="pickWorkDir(s, '')"
+                  >
+                    （根目录）
+                  </div>
+                  <div
+                    v-for="d in subdirs"
+                    :key="d"
+                    class="combo-item mono"
+                    :class="{ active: s.workDir === d }"
+                    @mousedown.prevent="pickWorkDir(s, d)"
+                  >
+                    {{ d }}
+                  </div>
+                  <div v-if="subdirs.length === 0" class="combo-empty">根目录下没有子目录，可手动输入相对路径</div>
+                </div>
+              </div>
               <select v-model="s.terminal" title="终端">
                 <option value="cmd">CMD</option>
                 <option value="powershell">PowerShell</option>

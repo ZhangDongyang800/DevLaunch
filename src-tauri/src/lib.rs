@@ -45,6 +45,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_config,
+            commands::list_subdirs,
             commands::launch_project_cmd,
             commands::launch_group_cmd,
             commands::run_step,

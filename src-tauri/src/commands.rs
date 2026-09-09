@@ -7,6 +7,26 @@ use std::path::Path;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_autostart::ManagerExt;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subdirs_lists_only_directories_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("web")).unwrap();
+        std::fs::create_dir(dir.path().join("server")).unwrap();
+        std::fs::write(dir.path().join("file.txt"), "x").unwrap();
+        let got = subdirs(dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(got, vec!["server", "web"]);
+    }
+
+    #[test]
+    fn subdirs_errors_on_missing_path() {
+        assert!(subdirs(r"Z:\definitely-missing-xyz-12345").is_err());
+    }
+}
+
 #[tauri::command]
 pub fn get_config(state: State<AppState>) -> AppConfig {
     state.config.lock().unwrap().clone()
@@ -97,6 +117,23 @@ pub fn import_config_from(app: AppHandle, state: State<AppState>, path: String) 
 #[tauri::command]
 pub fn get_autostart(app: AppHandle) -> Result<bool, String> {
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+pub fn subdirs(path: &str) -> Result<Vec<String>, String> {
+    let mut dirs = Vec::new();
+    for entry in std::fs::read_dir(path).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            dirs.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    dirs.sort();
+    Ok(dirs)
+}
+
+#[tauri::command]
+pub fn list_subdirs(path: String) -> Result<Vec<String>, String> {
+    subdirs(&path)
 }
 
 #[tauri::command]

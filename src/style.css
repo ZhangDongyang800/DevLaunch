@@ -592,6 +592,11 @@ h1 {
   max-width: 220px;
 }
 
+.s-meta .combo input.inline {
+  width: 100%;
+  max-width: none;
+}
+
 .s-meta select {
   background: transparent;
   border-color: transparent;
@@ -601,6 +606,57 @@ h1 {
 .s-meta select:focus { background: var(--bg); border-color: var(--border-strong); }
 
 .s-meta .spacer { flex: 1; }
+
+/* workDir combo: input + subdir picker */
+
+.combo {
+  position: relative;
+  flex: 1 1 96px;
+  min-width: 96px;
+  max-width: 220px;
+}
+
+.combo input {
+  width: 100%;
+  font-size: 11.5px;
+  padding: 3px 6px;
+  color: var(--muted);
+}
+
+.combo-menu {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  z-index: 20;
+  min-width: 200px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+
+.combo-item {
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.combo-item:hover { background: var(--bg); }
+
+.combo-item.active { color: var(--signal); }
+
+.combo-empty {
+  padding: 4px 9px;
+  color: var(--faint);
+  font-size: 11px;
+}
 
 .adv-toggle {
   font-family: var(--mono);
@@ -722,6 +778,11 @@ h1 {
   }
 
   .s-meta input.inline {
+    flex-basis: 88px;
+    max-width: none;
+  }
+
+  .s-meta .combo {
     flex-basis: 88px;
     max-width: none;
   }
