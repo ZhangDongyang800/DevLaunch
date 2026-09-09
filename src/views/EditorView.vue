@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { config, persist } from '../store'
 import { launchGroup, runStep } from '../api'
 import { newGroup, newStep, type Group, type ReadyCondition, type Step } from '../types'
@@ -8,6 +8,15 @@ const props = defineProps<{ projectId: string }>()
 const emit = defineEmits<{ back: []; notify: [msg: string, kind?: 'ok' | 'err'] }>()
 
 const project = computed(() => config.value!.projects.find((p) => p.id === props.projectId)!)
+
+const expanded = ref(new Set<string>())
+
+function toggleAdvanced(id: string) {
+  const next = new Set(expanded.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  expanded.value = next
+}
 
 async function save() {
   try {
@@ -49,10 +58,10 @@ function onCondTypeChange(step: Step, t: string) {
 }
 
 function gateText(c: ReadyCondition): string {
-  if (c.type === 'delay') return `延迟 ${c.seconds} 秒`
-  if (c.type === 'port') return `等待端口 ${c.port}`
-  if (c.type === 'process') return `等待进程 ${c.processName || '…'}`
-  return '立即下一步'
+  if (c.type === 'delay') return `${c.seconds}s`
+  if (c.type === 'port') return `PORT ${c.port} READY`
+  if (c.type === 'process') return `PROC ${c.processName || '?'}`
+  return '立即'
 }
 
 async function tryRunStep(g: Group, s: Step) {
@@ -89,18 +98,18 @@ async function browseRoot() {
 
     <div class="meta-card">
       <label>根目录
-        <span class="row" style="margin-top: 4px">
+        <span class="row" style="margin-top: 3px">
           <input class="grow mono" v-model="project.rootDir" placeholder="D:\Projects\my-app" />
-          <button @click="browseRoot">选择…</button>
+          <button class="bordered" @click="browseRoot">选择…</button>
         </span>
       </label>
     </div>
 
     <div v-for="(g, gi) in project.groups" :key="g.id" class="group-block">
       <div class="group-head">
-        <span class="group-index mono">{{ String(gi + 1).padStart(2, '0') }}</span>
+        <span class="group-index">{{ String(gi + 1).padStart(2, '0') }}</span>
         <input v-model="g.name" class="group-name grow" />
-        <button @click="tryRunGroup(g)">▶ 运行本组</button>
+        <button class="group-run" @click="tryRunGroup(g)">▶ 运行本组</button>
         <button class="danger ghost" @click="removeGroup(gi)">删除组</button>
       </div>
 
@@ -135,27 +144,41 @@ async function browseRoot() {
                 <option value="port">完成后：等端口</option>
                 <option value="process">完成后：等进程</option>
               </select>
-              <span class="row" style="margin-left: auto">
-                <button class="ghost" :disabled="si === 0" title="上移" @click="moveStep(g, si, -1)">↑</button>
-                <button class="ghost" :disabled="si === g.steps.length - 1" title="下移" @click="moveStep(g, si, 1)">↓</button>
-                <button class="danger ghost" title="删除步骤" @click="removeStep(g, si)">✕</button>
-              </span>
+              <span class="spacer" />
+              <button
+                v-if="s.readyCondition.type !== 'immediate'"
+                class="adv-toggle mono"
+                @click="toggleAdvanced(s.id)"
+              >
+                {{ expanded.has(s.id) ? '参数 ▴' : '参数 ▾' }}
+              </button>
+              <button class="ghost" :disabled="si === 0" title="上移" @click="moveStep(g, si, -1)">↑</button>
+              <button class="ghost" :disabled="si === g.steps.length - 1" title="下移" @click="moveStep(g, si, 1)">↓</button>
+              <button class="danger ghost" title="删除步骤" @click="removeStep(g, si)">✕</button>
             </div>
 
-            <div class="cond-fields" v-if="s.readyCondition.type === 'delay'">
-              <label>等待秒数 <input type="number" v-model.number="(s.readyCondition as any).seconds" min="0" /></label>
-            </div>
-            <div class="cond-fields" v-else-if="s.readyCondition.type === 'port'">
-              <label>主机 <input class="mono" v-model="(s.readyCondition as any).host" /></label>
-              <label>端口 <input type="number" class="mono" v-model.number="(s.readyCondition as any).port" min="1" max="65535" /></label>
-              <label>超时秒 <input type="number" class="mono" v-model.number="(s.readyCondition as any).timeoutSec" min="0" /></label>
-            </div>
-            <div class="cond-fields" v-else-if="s.readyCondition.type === 'process'">
-              <label>进程名（如 python.exe，不要填终端自身）<input class="mono" v-model="(s.readyCondition as any).processName" /></label>
-              <label>超时秒 <input type="number" class="mono" v-model.number="(s.readyCondition as any).timeoutSec" min="0" /></label>
+            <div
+              v-show="s.readyCondition.type !== 'immediate' && expanded.has(s.id)"
+              class="cond-fields"
+            >
+              <template v-if="s.readyCondition.type === 'delay'">
+                <label>等待秒数 <input type="number" v-model.number="(s.readyCondition as any).seconds" min="0" /></label>
+              </template>
+              <template v-else-if="s.readyCondition.type === 'port'">
+                <label>主机 <input class="mono" v-model="(s.readyCondition as any).host" /></label>
+                <label>端口 <input type="number" class="mono" v-model.number="(s.readyCondition as any).port" min="1" max="65535" /></label>
+                <label>超时秒 <input type="number" class="mono" v-model.number="(s.readyCondition as any).timeoutSec" min="0" /></label>
+              </template>
+              <template v-else-if="s.readyCondition.type === 'process'">
+                <label>进程名（如 python.exe，不要填终端自身）<input class="mono" v-model="(s.readyCondition as any).processName" /></label>
+                <label>超时秒 <input type="number" class="mono" v-model.number="(s.readyCondition as any).timeoutSec" min="0" /></label>
+              </template>
             </div>
 
-            <div v-if="si < g.steps.length - 1" class="gate-note mono">完成后 → {{ gateText(s.readyCondition) }}</div>
+            <div v-if="si < g.steps.length - 1" class="gate-note">
+              <span class="g-arrow">└</span>
+              <span>完成后 → {{ gateText(s.readyCondition) }}</span>
+            </div>
           </div>
         </li>
       </ol>
@@ -165,7 +188,7 @@ async function browseRoot() {
       </div>
     </div>
 
-    <button class="ghost" style="width: 100%; border: 1.5px dashed var(--border-strong)" @click="addGroup">
+    <button class="ghost" style="width: 100%; border: 1px dashed var(--border-strong)" @click="addGroup">
       + 添加分组
     </button>
 

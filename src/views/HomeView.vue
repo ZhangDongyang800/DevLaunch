@@ -18,9 +18,9 @@ function stepLabel(s: Step): string {
 }
 
 function gateText(c: ReadyCondition): string | null {
-  if (c.type === 'delay') return `⏳ ${c.seconds}s`
-  if (c.type === 'port') return `⏳ 端口 ${c.port}`
-  if (c.type === 'process') return `⏳ ${c.processName || '进程'}`
+  if (c.type === 'delay') return `${c.seconds}s`
+  if (c.type === 'port') return `PORT ${c.port} READY`
+  if (c.type === 'process') return `PROC ${c.processName || '?'}`
   return null
 }
 
@@ -51,8 +51,8 @@ function createProject() {
 <template>
   <div class="home">
     <div class="home-head">
-      <h1>项目</h1>
-      <span class="home-count mono">{{ projects.length }} 个</span>
+      <h1>启动台</h1>
+      <span class="home-count mono">{{ projects.length }} PROJECTS</span>
     </div>
 
     <div v-if="projects.length === 0" class="empty-state">
@@ -74,17 +74,20 @@ function createProject() {
       <button class="launch-btn" title="启动" @click.stop="launch(p.id)">▶</button>
 
       <div class="pc-info">
-        <span class="pc-name">{{ p.name || '未命名项目' }}</span>
-        <span class="pc-path mono">{{ p.rootDir || '未设置根目录' }}</span>
+        <div class="pc-head">
+          <span class="pc-name">{{ p.name || '未命名项目' }}</span>
+          <span class="pc-path mono">{{ p.rootDir || '未设置根目录' }}</span>
+        </div>
         <div class="pc-pipeline">
           <template v-for="(s, i) in projectSteps(p)" :key="s.id">
-            <span v-if="i > 0" class="pc-arrow">→</span>
-            <span class="chip" :title="s.command">{{ stepLabel(s) }}</span>
-            <span v-if="i < projectSteps(p).length - 1 && gateText(s.readyCondition)" class="chip gate">
-              {{ gateText(s.readyCondition) }}
-            </span>
+            <span v-if="i > 0" class="pl-sep">→</span>
+            <span class="pl-cmd" :title="s.command">{{ stepLabel(s) }}</span>
+            <template v-if="i < projectSteps(p).length - 1 && gateText(s.readyCondition)">
+              <span class="pl-sep">→</span>
+              <span class="pl-gate">{{ gateText(s.readyCondition) }}</span>
+            </template>
           </template>
-          <span v-if="projectSteps(p).length === 0" class="chip none">未配置步骤</span>
+          <span v-if="projectSteps(p).length === 0" class="pl-empty">无步骤</span>
         </div>
       </div>
 
