@@ -271,7 +271,11 @@ h1 {
 
 /* ---------- home: launch deck ---------- */
 
-.home { max-width: 880px; }
+.home {
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+}
 
 .home-head {
   display: flex;
@@ -396,7 +400,11 @@ h1 {
 
 /* ---------- editor: launch flow ---------- */
 
-.editor { max-width: 880px; }
+.editor {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+}
 
 .editor-head {
   display: flex;
@@ -560,6 +568,8 @@ h1 {
   color: var(--muted);
 }
 
+.s-meta input.inline { width: 96px; min-width: 0; }
+
 .s-meta select {
   background: transparent;
   border-color: transparent;
@@ -593,6 +603,7 @@ h1 {
 
 .cond-fields {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: center;
   margin: 4px 0 2px;
@@ -601,14 +612,18 @@ h1 {
   border-left: 2px solid var(--border-strong);
 }
 
-.cond-fields label { flex-direction: row; align-items: center; gap: 6px; }
+.cond-fields label { flex-direction: row; align-items: center; gap: 6px; flex-shrink: 0; }
 .cond-fields input { width: 80px; font-family: var(--mono); font-size: 11.5px; padding: 3px 6px; }
 
 .group-foot { margin-top: 0; }
 
 /* ---------- settings: dev-tool rows ---------- */
 
-.settings { max-width: 640px; }
+.settings {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+}
 
 .settings .list-row {
   display: flex;
@@ -669,3 +684,22 @@ h1 {
 
 .toast-enter-active, .toast-leave-active { transition: opacity 0.12s, transform 0.12s; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(4px); }
+
+/* ---------- narrow windows ---------- */
+
+@media (max-width: 780px) {
+  .pc-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+  }
+
+  .pc-path {
+    display: block;
+    max-width: 100%;
+  }
+
+  .s-meta input.inline { width: 88px; }
+
+  .main { padding: 14px 14px 24px; }
+}
