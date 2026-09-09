@@ -1,5 +1,6 @@
 pub mod config;
 pub mod platform;
+pub mod ready;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
