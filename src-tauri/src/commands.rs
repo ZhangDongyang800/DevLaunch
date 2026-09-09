@@ -1,0 +1,110 @@
+use crate::config::AppConfig;
+use crate::launcher;
+use crate::tray;
+use crate::AppState;
+use std::fs;
+use std::path::Path;
+use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_autostart::ManagerExt;
+
+#[tauri::command]
+pub fn get_config(state: State<AppState>) -> AppConfig {
+    state.config.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn save_config(app: AppHandle, state: State<AppState>, config: AppConfig) -> Result<(), String> {
+    {
+        let mut guard = state.config.lock().unwrap();
+        *guard = config;
+        guard.save(&state.path)?;
+    }
+    tray::rebuild(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn launch_project_cmd(app: AppHandle, state: State<AppState>, project_id: String) -> Result<(), String> {
+    let cfg = state.config.lock().unwrap().clone();
+    std::thread::spawn(move || {
+        let result = launcher::launch_project(&app, &cfg, &project_id);
+        let _ = app.emit("launch-result", result.err());
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn launch_group_cmd(
+    app: AppHandle,
+    state: State<AppState>,
+    project_id: String,
+    group_id: String,
+) -> Result<(), String> {
+    let cfg = state.config.lock().unwrap().clone();
+    std::thread::spawn(move || {
+        let result = launcher::launch_group(&app, &cfg, &project_id, &group_id);
+        let _ = app.emit("launch-result", result.err());
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn run_step(
+    app: AppHandle,
+    state: State<AppState>,
+    project_id: String,
+    group_id: String,
+    step_id: String,
+) -> Result<(), String> {
+    let cfg = state.config.lock().unwrap().clone();
+    launcher::run_step(&app, &cfg, &project_id, &group_id, &step_id)
+}
+
+#[tauri::command]
+pub fn open_dir(path: String) -> Result<(), String> {
+    if !Path::new(&path).is_dir() {
+        return Err(format!("目录不存在：{path}"));
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer").arg(&path).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(windows))]
+    {
+        return Err("open_dir 仅支持 Windows（v1）".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn export_config_to(state: State<AppState>, path: String) -> Result<(), String> {
+    state.config.lock().unwrap().save(Path::new(&path))
+}
+
+#[tauri::command]
+pub fn import_config_from(app: AppHandle, state: State<AppState>, path: String) -> Result<(), String> {
+    let text = fs::read_to_string(&path).map_err(|e| format!("读取失败：{e}"))?;
+    let cfg: AppConfig = serde_json::from_str(&text).map_err(|e| format!("配置文件格式错误：{e}"))?;
+    {
+        let mut guard = state.config.lock().unwrap();
+        *guard = cfg;
+        guard.save(&state.path)?;
+    }
+    tray::rebuild(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let auto = app.autolaunch();
+    if enabled {
+        auto.enable().map_err(|e| e.to_string())
+    } else {
+        auto.disable().map_err(|e| e.to_string())
+    }
+}
