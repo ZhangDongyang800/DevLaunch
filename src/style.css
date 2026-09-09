@@ -452,6 +452,8 @@ h1 {
   gap: 8px;
   padding: 4px 8px;
   margin-bottom: 16px;
+  width: 100%;
+  max-width: 640px;
 }
 
 .pathbar .pb-label {
@@ -583,7 +585,12 @@ h1 {
   color: var(--muted);
 }
 
-.s-meta input.inline { width: 96px; min-width: 0; }
+.s-meta input.inline {
+  flex: 1 1 96px;
+  width: auto;
+  min-width: 96px;
+  max-width: 220px;
+}
 
 .s-meta select {
   background: transparent;
@@ -714,7 +721,10 @@ h1 {
     max-width: 100%;
   }
 
-  .s-meta input.inline { width: 88px; }
+  .s-meta input.inline {
+    flex-basis: 88px;
+    max-width: none;
+  }
 
   .main { padding: 14px 14px 24px; }
 }
