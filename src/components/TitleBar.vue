@@ -14,9 +14,14 @@ function close() {
 
 <template>
   <header class="titlebar">
-    <div class="brand mono" data-tauri-drag-region>
-      <span class="brand-dot" />DevLaunch
+    <div class="brand" data-tauri-drag-region>
+      <span class="brand-dot" />
+      <span>DevLaunch</span>
+      <span class="brand-cursor" />
     </div>
+    <nav class="tb-nav">
+      <slot />
+    </nav>
     <div class="tb-spacer" data-tauri-drag-region />
     <div class="win-controls">
       <button class="win-btn" title="最小化" @click="minimize">

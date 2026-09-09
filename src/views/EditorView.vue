@@ -96,21 +96,18 @@ async function browseRoot() {
       <button class="primary" @click="save">保存</button>
     </div>
 
-    <div class="meta-card">
-      <label>根目录
-        <span class="row" style="margin-top: 3px">
-          <input class="grow mono" v-model="project.rootDir" placeholder="D:\Projects\my-app" />
-          <button class="bordered" @click="browseRoot">选择…</button>
-        </span>
-      </label>
+    <div class="pathbar mono">
+      <span class="pb-label">ROOT</span>
+      <input class="inline" v-model="project.rootDir" placeholder="D:\Projects\my-app" />
+      <button class="ghost" @click="browseRoot">选择…</button>
     </div>
 
-    <div v-for="(g, gi) in project.groups" :key="g.id" class="group-block">
+    <div v-for="(g, gi) in project.groups" :key="g.id" class="group">
       <div class="group-head">
         <span class="group-index">{{ String(gi + 1).padStart(2, '0') }}</span>
         <input v-model="g.name" class="group-name grow" />
-        <button class="group-run" @click="tryRunGroup(g)">▶ 运行本组</button>
-        <button class="danger ghost" @click="removeGroup(gi)">删除组</button>
+        <button class="accent" @click="tryRunGroup(g)">▶ 运行本组</button>
+        <button class="danger ghost" @click="removeGroup(gi)">✕</button>
       </div>
 
       <ol class="steps">
@@ -123,12 +120,12 @@ async function browseRoot() {
           <div class="step-body">
             <div class="s-main">
               <input v-model="s.command" class="cmd-input" placeholder="命令，如 npm run dev" />
-              <button class="run-step" title="单步运行" @click="tryRunStep(g, s)">▶</button>
+              <button class="run-step" title="单步运行" @click="tryRunStep(g, s)">▶ RUN</button>
             </div>
 
             <div class="s-meta">
-              <input v-model="s.name" placeholder="名称" title="名称（可选）" />
-              <input v-model="s.workDir" placeholder="子目录（留空=根目录）" title="工作目录" />
+              <input class="inline" v-model="s.name" placeholder="名称" title="名称（可选）" />
+              <input class="inline" v-model="s.workDir" placeholder="子目录（留空=根目录）" title="工作目录" />
               <select v-model="s.terminal" title="终端">
                 <option value="cmd">CMD</option>
                 <option value="powershell">PowerShell</option>
@@ -150,7 +147,7 @@ async function browseRoot() {
                 class="adv-toggle mono"
                 @click="toggleAdvanced(s.id)"
               >
-                {{ expanded.has(s.id) ? '参数 ▴' : '参数 ▾' }}
+                {{ expanded.has(s.id) ? '▾ 参数' : '▸ 参数' }}
               </button>
               <button class="ghost" :disabled="si === 0" title="上移" @click="moveStep(g, si, -1)">↑</button>
               <button class="ghost" :disabled="si === g.steps.length - 1" title="下移" @click="moveStep(g, si, 1)">↓</button>
@@ -162,7 +159,7 @@ async function browseRoot() {
               class="cond-fields"
             >
               <template v-if="s.readyCondition.type === 'delay'">
-                <label>等待秒数 <input type="number" v-model.number="(s.readyCondition as any).seconds" min="0" /></label>
+                <label>等待秒数 <input type="number" class="mono" v-model.number="(s.readyCondition as any).seconds" min="0" /></label>
               </template>
               <template v-else-if="s.readyCondition.type === 'port'">
                 <label>主机 <input class="mono" v-model="(s.readyCondition as any).host" /></label>
@@ -176,8 +173,8 @@ async function browseRoot() {
             </div>
 
             <div v-if="si < g.steps.length - 1" class="gate-note">
-              <span class="g-arrow">└</span>
-              <span>完成后 → {{ gateText(s.readyCondition) }}</span>
+              <span>└ 完成后 →</span>
+              <span class="g-signal">{{ gateText(s.readyCondition) }}</span>
             </div>
           </div>
         </li>

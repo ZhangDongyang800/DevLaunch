@@ -31,15 +31,14 @@ onMounted(async () => {
 
 <template>
   <div class="app" v-if="config">
-    <TitleBar />
-    <nav class="nav">
-      <button class="nav-item" :class="{ active: view.name === 'home' }" @click="view = { name: 'home' }">
+    <TitleBar>
+      <button class="tb-nav-item" :class="{ active: view.name === 'home' }" @click="view = { name: 'home' }">
         项目
       </button>
-      <button class="nav-item" :class="{ active: view.name === 'settings' }" @click="view = { name: 'settings' }">
+      <button class="tb-nav-item" :class="{ active: view.name === 'settings' }" @click="view = { name: 'settings' }">
         设置
       </button>
-    </nav>
+    </TitleBar>
     <main class="main">
       <HomeView v-if="view.name === 'home'" @edit="view = { name: 'editor', projectId: $event }" @notify="showToast" />
       <EditorView v-else-if="view.name === 'editor'" :project-id="view.projectId" @back="view = { name: 'home' }" @notify="showToast" />

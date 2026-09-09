@@ -68,43 +68,48 @@ async function doImport() {
 
 <template>
   <div class="settings" v-if="config">
-    <h1 style="margin-bottom: 16px">设置</h1>
-
-    <div class="set-row">
-      <div class="set-info">
-        <div class="set-title">开机自动启动</div>
-        <div class="set-sub">开机后 DevLaunch 常驻托盘，随时一键启动项目</div>
-      </div>
-      <label class="switch">
-        <input type="checkbox" v-model="autostart" @change="toggleAutostart" />
-        <span class="slider" />
-      </label>
+    <div class="home-head">
+      <h1>设置</h1>
+      <span class="home-count mono">SETTINGS</span>
     </div>
 
-    <div class="set-row">
-      <div class="set-info">
-        <div class="set-title">默认就绪超时</div>
-        <div class="set-sub">步骤等待端口 / 进程就绪的兜底秒数</div>
+    <div class="list">
+      <div class="list-row">
+        <div class="set-info">
+          <div class="set-title">开机自动启动</div>
+          <div class="set-sub">开机后 DevLaunch 常驻托盘，随时一键启动项目</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" v-model="autostart" @change="toggleAutostart" />
+          <span class="slider" />
+        </label>
       </div>
-      <input
-        type="number"
-        class="mono"
-        style="width: 90px"
-        v-model.number="config.settings.readyTimeoutSec"
-        min="1"
-        @change="saveTimeout"
-      />
+
+      <div class="list-row">
+        <div class="set-info">
+          <div class="set-title">默认就绪超时</div>
+          <div class="set-sub">步骤等待端口 / 进程就绪的兜底秒数</div>
+        </div>
+        <input
+          type="number"
+          class="mono"
+          style="width: 80px"
+          v-model.number="config.settings.readyTimeoutSec"
+          min="1"
+          @change="saveTimeout"
+        />
+      </div>
+
+      <div class="list-row">
+        <div class="set-info">
+          <div class="set-title">配置备份</div>
+          <div class="set-sub">导出 JSON 备份，或从备份文件导入恢复</div>
+        </div>
+        <button class="ghost" @click="doExport">导出</button>
+        <button class="ghost" @click="doImport">导入</button>
+      </div>
     </div>
 
-    <div class="set-row">
-      <div class="set-info">
-        <div class="set-title">配置备份</div>
-        <div class="set-sub">导出 JSON 备份，或从备份文件导入恢复</div>
-      </div>
-      <button @click="doExport">导出</button>
-      <button @click="doImport">导入</button>
-    </div>
-
-    <p class="hint">配置文件位置：%APPDATA%\com.devlaunch.app\config.json</p>
+    <p class="hint mono">%APPDATA%\com.devlaunch.app\config.json</p>
   </div>
 </template>

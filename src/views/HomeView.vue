@@ -61,39 +61,41 @@ function createProject() {
       <button class="primary" @click="createProject">+ 新建项目</button>
     </div>
 
-    <div
-      v-for="p in projects"
-      :key="p.id"
-      class="project-card"
-      role="button"
-      tabindex="0"
-      title="点击启动"
-      @click="launch(p.id)"
-      @keydown.enter="launch(p.id)"
-    >
-      <button class="launch-btn" title="启动" @click.stop="launch(p.id)">▶</button>
+    <div v-else class="list">
+      <div
+        v-for="p in projects"
+        :key="p.id"
+        class="project-row"
+        role="button"
+        tabindex="0"
+        title="点击启动"
+        @click="launch(p.id)"
+        @keydown.enter="launch(p.id)"
+      >
+        <button class="launch-btn" title="启动" @click.stop="launch(p.id)">▶</button>
 
-      <div class="pc-info">
-        <div class="pc-head">
-          <span class="pc-name">{{ p.name || '未命名项目' }}</span>
-          <span class="pc-path mono">{{ p.rootDir || '未设置根目录' }}</span>
-        </div>
-        <div class="pc-pipeline">
-          <template v-for="(s, i) in projectSteps(p)" :key="s.id">
-            <span v-if="i > 0" class="pl-sep">→</span>
-            <span class="pl-cmd" :title="s.command">{{ stepLabel(s) }}</span>
-            <template v-if="i < projectSteps(p).length - 1 && gateText(s.readyCondition)">
-              <span class="pl-sep">→</span>
-              <span class="pl-gate">{{ gateText(s.readyCondition) }}</span>
+        <div class="pc-info">
+          <div class="pc-head">
+            <span class="pc-name">{{ p.name || '未命名项目' }}</span>
+            <span class="pc-path mono">{{ p.rootDir || '未设置根目录' }}</span>
+          </div>
+          <div class="pc-pipeline">
+            <template v-for="(s, i) in projectSteps(p)" :key="s.id">
+              <span v-if="i > 0" class="pl-sep">→</span>
+              <span class="pl-cmd" :title="s.command">{{ stepLabel(s) }}</span>
+              <template v-if="i < projectSteps(p).length - 1 && gateText(s.readyCondition)">
+                <span class="pl-sep">→</span>
+                <span class="pl-gate">{{ gateText(s.readyCondition) }}</span>
+              </template>
             </template>
-          </template>
-          <span v-if="projectSteps(p).length === 0" class="pl-empty">无步骤</span>
+            <span v-if="projectSteps(p).length === 0" class="pl-empty">无步骤</span>
+          </div>
         </div>
-      </div>
 
-      <div class="pc-side">
-        <button @click.stop="open(p.rootDir)">打开目录</button>
-        <button @click.stop="emit('edit', p.id)">编辑</button>
+        <div class="pc-side">
+          <button class="ghost" @click.stop="open(p.rootDir)">打开目录</button>
+          <button class="ghost" @click.stop="emit('edit', p.id)">编辑</button>
+        </div>
       </div>
     </div>
   </div>
