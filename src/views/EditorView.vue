@@ -57,6 +57,8 @@ function pickWorkDir(it: Item, dir: string) {
 
 async function tryRunItem(it: Item) {
   try {
+    await persist()
+    savedSnapshot.value = JSON.stringify(project.value)
     await launchItem(project.value.id, it.id)
     emit('notify', `已启动「${it.name || '启动项'}」`)
   } catch (e) {
@@ -96,6 +98,8 @@ async function doExportToRoot() {
   const path = projectFilePath()
   if (!path) { emit('notify', '请先设置项目根目录', 'err'); return }
   try {
+    await persist()
+    savedSnapshot.value = JSON.stringify(project.value)
     await exportProjectFile(project.value.id)
     emit('notify', `已导出到 ${path}`)
   } catch (e) {
