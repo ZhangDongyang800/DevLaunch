@@ -1,7 +1,7 @@
 # DevLaunch v3 设计文档：wt pane 编排器
 
 日期：2026-09-10
-状态：待用户复核
+状态：已废弃（被 `2026-09-10-devlaunch-v3-minimal-design.md` 取代）
 关联：`docs/PRODUCT.md`、`docs/superpowers/specs/2026-09-09-devlaunch-design.md`（v2）
 
 ## 1. 背景与问题
