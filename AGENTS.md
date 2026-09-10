@@ -79,4 +79,4 @@ src-tauri/src/
 - `tauri-plugin-opener` 在 Cargo.toml / package.json / capabilities（`opener:default`）中均未使用（模板遗留，lib.rs 未注册），清理时需三处同删。
 - 非 Windows 目标当前**编译不过**（`platform/mod.rs` 的非 Windows stub 里 `LaunchMode` 缺 `PartialEq`）；本产品仅 Windows，别做跨平台构建/交叉编译验证。
 - 根目录未跟踪的 `XingTu-devlaunch.json` 是用户个人模板导出：**不要提交、不要删除**。提交按任务精确 `git add`，不要 `git add -A`。
-- 开发分支 `feature/devlaunch`，合并到 main 待人工 e2e 验收后进行。
+- 远程 `origin`：https://github.com/ZhangDongyang800/DevLaunch（默认分支 `main` = 当前代码；本地 `main` 分支陈旧勿用；`git push` 即发布到公开仓库）。
