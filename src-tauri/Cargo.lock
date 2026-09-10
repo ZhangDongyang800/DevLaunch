@@ -749,6 +749,7 @@ dependencies = [
 name = "devlaunch"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "encoding_rs",
  "serde",
  "serde_json",

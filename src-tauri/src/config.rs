@@ -18,6 +18,14 @@ pub enum Terminal {
     WindowsTerminal,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Shell {
+    #[default]
+    Cmd,
+    PowerShell,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ReadyCondition {
@@ -208,6 +216,13 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    #[test]
+    fn shell_serializes_lowercase() {
+        assert_eq!(serde_json::to_string(&Shell::Cmd).unwrap(), "\"cmd\"");
+        assert_eq!(serde_json::to_string(&Shell::PowerShell).unwrap(), "\"powershell\"");
+        assert_eq!(Shell::default(), Shell::Cmd);
     }
 
     #[test]
