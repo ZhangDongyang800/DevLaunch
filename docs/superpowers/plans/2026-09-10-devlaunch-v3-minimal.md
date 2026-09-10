@@ -559,7 +559,7 @@ Run: `cargo test` → FAIL（模型未实现）
 
 - [ ] **Step 2: 实现 config v3 模型与迁移**
 
-重写 `config.rs`（上方文件审计中的“保留项”逐字保留）。核心代码：
+重写 `config.rs`（上方文件审计中的“保留项”逐字保留；**Task 1 已加入的 `Shell` 定义必须保留**）。核心代码：
 
 ```rust
 pub const CONFIG_VERSION: u32 = 3;
@@ -1456,7 +1456,7 @@ async function doImport() {
 
 - [ ] **Step 6: SettingsView.vue 删除就绪超时**
 
-删除第二个 `list-row`（默认就绪超时）与 `saveTimeout` 函数；保留 autostart 与配置备份。
+删除第二个 `list-row`（默认就绪超时）与 `saveTimeout` 函数；**同时把 `import { config, persist } from '../store'` 改为 `import { config } from '../store'`**（`persist` 不再使用，否则 vue-tsc 报未使用）。保留 autostart 与配置备份。
 
 - [ ] **Step 7: style.css 清理**
 
