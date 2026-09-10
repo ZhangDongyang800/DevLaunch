@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-Windows 托盘常驻的「开发项目一键重放器」：一次配置项目的启动项（名称/目录/命令/方言），点击按钮一次 `wt` 调用打开一个 Windows Terminal 窗口、每个启动项一个窗格并行执行命令；`wt` 缺失时降级为独立终端窗口。Tauri 2 + Rust + Vue 3 + TS。产品说明见 `docs/PRODUCT.md`，设计 spec 见 `docs/superpowers/specs/2026-09-10-devlaunch-v3-minimal-design.md`。README.md 是 Tauri 模板占位，可直接忽略。
+Windows 托盘常驻的「开发项目一键重放器」：一次配置项目的启动项（名称/目录/命令/方言），点击按钮一次 `wt` 调用打开一个 Windows Terminal 窗口、每个启动项一个窗格并行执行命令；`wt` 缺失时降级为独立终端窗口。Tauri 2 + Rust + Vue 3 + TS。产品说明见 `docs/PRODUCT.md`；设计 spec 见 `docs/superpowers/specs/2026-09-10-devlaunch-v3-minimal-design.md`（`2026-09-10-devlaunch-v3-panes-design.md` 已标注 superseded，别读）。README.md 面向 GitHub 用户，与 `docs/PRODUCT.md` 同源，改产品行为时两处一起更新。
 
 ## Environment quirks（必须知道）
 
@@ -22,7 +22,8 @@ npm run tauri build    # release 构建（~4min）；产物 src-tauri/target/rel
 
 - Tauri 改 Rust 代码后 `tauri dev` 会重编译；改前端热更新。
 - 改了 capabilities/tauri.conf.json 后需要重新构建才生效。
-- **构建纪律：攒批构建，不要逐次构建。** `npm run tauri build` 每次 ~4min；一个会话内有多项改动时，先全部完成并用 `npm run build`（快，秒级）做类型/编译验收，最后统一跑一次 `tauri build`。只有"用户需要立即拿到可执行文件验证"时才允许中途构建。
+- 单测过滤：`cargo test <关键字>`（如 `cargo test migrate`、`cargo test platform`）；前端没有测试框架，`npm run build` 就是前端验收。
+- **构建纪律：攒批构建，不要逐次构建。** `npm run tauri build` 每次 ~4min；一个会话内有多项改动时，先完成全部改动并用 `npm run build` + `cargo test`（秒级）验收，最后统一跑一次 `tauri build`。只有"用户需要立即拿到可执行文件验证"时才允许中途构建。
 
 ## Architecture（非显而易见的部分）
 
@@ -75,5 +76,7 @@ src-tauri/src/
 - 应用 identifier `com.devlaunch.app`（构建警告 `.app` 后缀仅影响 macOS 约定，Windows 无碍，勿改——改了会导致用户配置路径迁移）。用户配置在 `%APPDATA%\com.devlaunch.app\config.json`（设置页也显示此路径）。
 - exe 实际名是小写 `devlaunch.exe`（productName=DevLaunch 但 exe 小写）。
 - 主窗口 `visible:false`：release 构建从托盘启动、不自动显示窗口；**仅 debug 构建在 setup 里 show()**（lib.rs）。跑 `tauri dev` 能看到窗口是靠这个，别删。
-- `tauri-plugin-opener` 在 Cargo.toml 中未被使用（CTA 模板遗留，lib.rs 未注册），可清理但需同时删 package.json 依赖与 capabilities 中 `opener:default`。
+- `tauri-plugin-opener` 在 Cargo.toml / package.json / capabilities（`opener:default`）中均未使用（模板遗留，lib.rs 未注册），清理时需三处同删。
+- 非 Windows 目标当前**编译不过**（`platform/mod.rs` 的非 Windows stub 里 `LaunchMode` 缺 `PartialEq`）；本产品仅 Windows，别做跨平台构建/交叉编译验证。
+- 根目录未跟踪的 `XingTu-devlaunch.json` 是用户个人模板导出：**不要提交、不要删除**。提交按任务精确 `git add`，不要 `git add -A`。
 - 开发分支 `feature/devlaunch`，合并到 main 待人工 e2e 验收后进行。
