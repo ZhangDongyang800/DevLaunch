@@ -13,6 +13,9 @@ dist-ssr
 *.local
 .superpowers/
 
+# Local-only docs (product docs, design specs, plans)
+docs/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

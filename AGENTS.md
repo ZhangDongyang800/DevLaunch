@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-Windows 托盘常驻的「开发项目一键重放器」：一次配置项目的启动项（名称/目录/命令/方言），点击按钮一次 `wt` 调用打开一个 Windows Terminal 窗口、每个启动项一个窗格并行执行命令；`wt` 缺失时降级为独立终端窗口。Tauri 2 + Rust + Vue 3 + TS。产品说明见 `docs/PRODUCT.md`；设计 spec 见 `docs/superpowers/specs/2026-09-10-devlaunch-v3-minimal-design.md`（`2026-09-10-devlaunch-v3-panes-design.md` 已标注 superseded，别读）。README.md 面向 GitHub 用户，与 `docs/PRODUCT.md` 同源，改产品行为时两处一起更新。
+Windows 托盘常驻的「开发项目一键重放器」：一次配置项目的启动项（名称/目录/命令/方言），点击按钮一次 `wt` 调用打开一个 Windows Terminal 窗口、每个启动项一个窗格并行执行命令；`wt` 缺失时降级为独立终端窗口。Tauri 2 + Rust + Vue 3 + TS。产品说明见 `docs/PRODUCT.md`；设计 spec 见 `docs/superpowers/specs/2026-09-10-devlaunch-v3-minimal-design.md`（`2026-09-10-devlaunch-v3-panes-design.md` 已标注 superseded，别读）。README.md（英文）与 README.zh-CN.md（中文）面向 GitHub 用户，与 `docs/PRODUCT.md` 同源，改产品行为时一起更新；**`docs/` 为本地资料，已 gitignore、不随仓库发布**。
 
 ## Environment quirks（必须知道）
 

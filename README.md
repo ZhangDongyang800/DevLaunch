@@ -1,72 +1,72 @@
 # DevLaunch
 
-**Windows 托盘常驻的开发项目一键启动器**——一次配置，一键重放平时手动敲的那几个终端启动命令。
+**One-click launcher for your Windows dev project startup** — configure once, replay your terminal startup commands with a single click.
+
+[English](README.md) | [简体中文](README.zh-CN.md)
 
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB)
 ![Vue](https://img.shields.io/badge/Vue-3-42B883)
 ![Rust](https://img.shields.io/badge/Rust-stable-000000)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-DevLaunch 记住你启动项目时手动做的事：打开终端、`cd` 进目录、激活环境、执行命令。配置一次，之后点击项目卡片，即可在一个 Windows Terminal 窗口中为每个启动项开一个窗格并并行执行。
+DevLaunch remembers what you do manually when starting a project: open terminals, `cd` into directories, activate environments, run commands. Configure it once; afterwards a single click on a project card opens a Windows Terminal window with one pane per startup item, all running in parallel.
 
-> 它是一键重放器，不是终端编排器：不等待、不轮询、不监控，命令失败与服务崩溃都留在真实终端里。
+> It is a one-click replay tool, not a terminal orchestrator: no waiting, no polling, no monitoring. Command failures and crashes stay in the real terminal for you to inspect.
 
-## 特性
+## Features
 
-- **一键启动**：一个项目 = 一个窗口，每个启动项一个窗格，并行执行
-- **真实可交互终端**：多行命令在同一 shell 会话内顺序执行（激活环境 → 启动服务），`Ctrl+C` 与手敲一致
-- **开箱可用**：优先 Windows Terminal，未安装时自动降级为多个独立终端窗口
-- **配置随仓库走**：导出 `devlaunch.json` 到项目根，队友导入即可运行
-- **兼容旧配置**：v1 / v2 配置与模板自动迁移
-- **托盘常驻**：右键菜单按项目启动，支持开机自启
+- **One-click startup**: one project = one window, one pane per item, launched in parallel
+- **Real interactive terminals**: multi-line commands run sequentially in the same shell session (activate env → start service); `Ctrl+C` behaves like manual typing
+- **Works out of the box**: prefers Windows Terminal; falls back to separate terminal windows when `wt` is unavailable
+- **Config travels with the repo**: export `devlaunch.json` into the project root, teammates import it and go
+- **Legacy config migration**: v1 / v2 configs and templates migrate automatically
+- **Tray resident**: per-project launch from the tray menu, optional launch at login
 
-## 快速开始
+## Quick Start
 
-**安装**：从 [Releases](../../releases) 下载 `.msi` 或 `-setup.exe`；也可以从源码构建：
+**Install**: download the `.msi` or `-setup.exe` from [Releases](../../releases), or build from source:
 
 ```bash
 npm install
-npm run tauri build   # 产物：src-tauri/target/release/
+npm run tauri build   # artifacts: src-tauri/target/release/
 ```
 
-**使用**：
+**Usage**:
 
-1. 打开 DevLaunch（常驻托盘），新建项目并选择项目根目录
-2. 添加启动项：名称、工作目录、命令（支持多行）、命令方言（cmd / PowerShell）
-3. 点击项目卡片启动
+1. Open DevLaunch (it stays in the tray), create a project and pick its root directory
+2. Add startup items: name, working directory, command (multi-line supported), shell (cmd / PowerShell)
+3. Click the project card to launch
 
-一个启动项就是一段平时手敲的命令，例如：
+A startup item is just the command you would type by hand, e.g.:
 
 ```jsonc
 {
   "version": 3,
   "name": "MyApp",
   "items": [
-    { "name": "后端", "workDir": "backend", "shell": "cmd",
+    { "name": "Backend", "workDir": "backend", "shell": "cmd",
       "command": "conda activate app\npython -m uvicorn main:app --reload" },
-    { "name": "前端", "workDir": "frontend", "shell": "cmd", "command": "npm run dev" }
+    { "name": "Frontend", "workDir": "frontend", "shell": "cmd", "command": "npm run dev" }
   ]
 }
 ```
 
-### 团队共享
+### Share with your team
 
-编辑器「导出到项目根」生成 `<项目根>\devlaunch.json`（不含本机路径），提交进仓库；队友新建项目选择该目录时会自动导入。请使用相对 `workDir`（如 `backend`）。
+Use **Export to project root** in the editor to generate `<project root>\devlaunch.json` (no machine-specific paths). Commit it; teammates who create a project pointing at that directory import it automatically. Use relative `workDir` values (e.g. `backend`).
 
-## 开发
+## Development
 
 ```bash
-npm run tauri dev     # 调试运行
-npm run build         # 前端类型检查 + 构建
-cargo test            # Rust 单测（在 src-tauri/ 下，41 个）
+npm run tauri dev     # run in dev mode
+npm run build         # frontend type-check + build
+cargo test            # Rust unit tests (in src-tauri/, 41 tests)
 ```
 
-要求：Windows 10 / 11、Node.js 20.19+ 或 22.12+、Rust（stable，MSVC 工具链）。
-运行时配置：`%APPDATA%\com.devlaunch.app\config.json`。
+Requirements: Windows 10 / 11, Node.js 20.19+ or 22.12+, Rust (stable, MSVC toolchain).
+Runtime config: `%APPDATA%\com.devlaunch.app\config.json`.
 
-- 产品说明：[docs/PRODUCT.md](docs/PRODUCT.md)
-- 设计文档：[docs/superpowers/specs/2026-09-10-devlaunch-v3-minimal-design.md](docs/superpowers/specs/2026-09-10-devlaunch-v3-minimal-design.md)
+## License
 
-## 许可证
-
-暂未指定。
+[MIT](LICENSE)
