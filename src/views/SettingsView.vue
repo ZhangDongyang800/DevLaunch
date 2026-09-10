@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { config, persist } from '../store'
+import { config } from '../store'
 import { exportConfigTo, getAutostart, getConfig, importConfigFrom, setAutostart } from '../api'
 
 const emit = defineEmits<{ notify: [msg: string, kind?: 'ok' | 'err'] }>()
@@ -22,15 +22,6 @@ async function toggleAutostart() {
   } catch (e) {
     autostart.value = !autostart.value
     emit('notify', `设置失败：${e}`, 'err')
-  }
-}
-
-async function saveTimeout() {
-  try {
-    await persist()
-    emit('notify', '默认超时已保存')
-  } catch (e) {
-    emit('notify', `保存失败：${e}`, 'err')
   }
 }
 
@@ -83,21 +74,6 @@ async function doImport() {
           <input type="checkbox" v-model="autostart" @change="toggleAutostart" />
           <span class="slider" />
         </label>
-      </div>
-
-      <div class="list-row">
-        <div class="set-info">
-          <div class="set-title">默认就绪超时</div>
-          <div class="set-sub">步骤等待端口 / 进程就绪的兜底秒数</div>
-        </div>
-        <input
-          type="number"
-          class="mono"
-          style="width: 80px"
-          v-model.number="config.settings.readyTimeoutSec"
-          min="1"
-          @change="saveTimeout"
-        />
       </div>
 
       <div class="list-row">

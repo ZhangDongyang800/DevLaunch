@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { config, persist } from '../store'
-import { newId, type Project, type ReadyCondition, type Step } from '../types'
+import { newId, type Item } from '../types'
 import { launchProject, openDir } from '../api'
 
 const emit = defineEmits<{ edit: [projectId: string]; notify: [msg: string, kind?: 'ok' | 'err'] }>()
@@ -27,20 +27,9 @@ function removeProject(id: string) {
     .catch((e) => emit('notify', `删除失败：${e}`, 'err'))
 }
 
-function projectSteps(p: Project): Step[] {
-  return p.groups.flatMap((g) => g.steps)
-}
-
-function stepLabel(s: Step): string {
-  const cmd = s.command.trim().split(/\s+/)[0] || ''
-  return (s.name || cmd || '未命名').trim()
-}
-
-function gateText(c: ReadyCondition): string | null {
-  if (c.type === 'delay') return `${c.seconds}s`
-  if (c.type === 'port') return `PORT ${c.port} READY`
-  if (c.type === 'process') return `PROC ${c.processName || '?'}`
-  return null
+function itemLabel(i: Item): string {
+  const cmd = i.command.trim().split('\n')[0]?.trim().split(/\s+/)[0] || ''
+  return (i.name || cmd || '未命名').trim()
 }
 
 async function launch(id: string) {
@@ -62,7 +51,7 @@ async function open(path: string) {
 
 function createProject() {
   if (!config.value) return
-  config.value.projects.push({ id: newId(), name: '新项目', rootDir: '', groups: [] })
+  config.value.projects.push({ id: newId(), name: '新项目', rootDir: '', items: [] })
   emit('edit', config.value.projects[config.value.projects.length - 1].id)
 }
 </script>
@@ -102,15 +91,11 @@ function createProject() {
             <span class="pc-path mono">{{ p.rootDir || '未设置根目录' }}</span>
           </div>
           <div class="pc-pipeline">
-            <template v-for="(s, i) in projectSteps(p)" :key="s.id">
-              <span v-if="i > 0" class="pl-sep">→</span>
-              <span class="pl-cmd" :title="s.command">{{ stepLabel(s) }}</span>
-              <template v-if="i < projectSteps(p).length - 1 && gateText(s.readyCondition)">
-                <span class="pl-sep">→</span>
-                <span class="pl-gate">{{ gateText(s.readyCondition) }}</span>
-              </template>
+            <template v-for="(it, i) in p.items" :key="it.id">
+              <span v-if="i > 0" class="pl-sep">·</span>
+              <span class="pl-cmd" :title="it.command">{{ itemLabel(it) }}</span>
             </template>
-            <span v-if="projectSteps(p).length === 0" class="pl-empty">无步骤</span>
+            <span v-if="p.items.length === 0" class="pl-empty">无启动项</span>
           </div>
         </div>
 

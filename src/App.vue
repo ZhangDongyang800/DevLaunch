@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { listen } from '@tauri-apps/api/event'
 import { load, config } from './store'
 import type { View, ToastKind } from './types'
 import TitleBar from './components/TitleBar.vue'
@@ -22,10 +21,6 @@ function showToast(msg: string, kind: ToastKind = 'ok') {
 
 onMounted(async () => {
   await load()
-  await listen<string | null>('launch-result', (e) => {
-    if (e.payload) showToast(`启动中断：${e.payload}`, 'err')
-    else showToast('启动完成', 'ok')
-  })
 })
 </script>
 

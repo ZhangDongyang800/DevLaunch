@@ -1,38 +1,23 @@
 export type View = { name: 'home' } | { name: 'editor'; projectId: string } | { name: 'settings' }
 
-export type Terminal = 'cmd' | 'powershell' | 'windowsterminal'
+export type Shell = 'cmd' | 'powershell'
 
-export type ReadyCondition =
-  | { type: 'immediate' }
-  | { type: 'delay'; seconds: number }
-  | { type: 'port'; port: number; host: string; timeoutSec: number }
-  | { type: 'process'; processName: string; timeoutSec: number }
-
-export interface Step {
+export interface Item {
   id: string
   name: string
   workDir?: string | null
-  terminal: Terminal
+  shell: Shell
   command: string
-  readyCondition: ReadyCondition
-}
-
-export interface Group {
-  id: string
-  name: string
-  terminal: Terminal
-  steps: Step[]
 }
 
 export interface Project {
   id: string
   name: string
   rootDir: string
-  groups: Group[]
+  items: Item[]
 }
 
 export interface Settings {
-  readyTimeoutSec: number
   autostart: boolean
 }
 
@@ -45,7 +30,7 @@ export interface AppConfig {
 export interface ProjectTemplate {
   version: number
   name: string
-  groups: Group[]
+  items: Item[]
 }
 
 export type ToastKind = 'ok' | 'err'
@@ -54,10 +39,6 @@ export function newId(): string {
   return crypto.randomUUID()
 }
 
-export function newStep(): Step {
-  return { id: newId(), name: '', workDir: '', terminal: 'cmd', command: '', readyCondition: { type: 'immediate' } }
-}
-
-export function newGroup(index: number): Group {
-  return { id: newId(), name: `组 ${index + 1}`, terminal: 'cmd', steps: [] }
+export function newItem(): Item {
+  return { id: newId(), name: '', workDir: '', shell: 'cmd', command: '' }
 }
