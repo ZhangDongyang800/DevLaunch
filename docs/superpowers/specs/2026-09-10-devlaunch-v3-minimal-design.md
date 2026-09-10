@@ -9,6 +9,8 @@
 
 产品目标：一个按钮，一键启动一个开发项目，替代用户手动「开多个终端 → 进目录 → 激活环境 → 执行启动命令」的繁琐过程。
 
+产品定位：**DevLaunch 是「一键重放器」，不是「终端编排器」**——记住用户平时启动项目时手动打开的多个终端和命令，并让用户一键重放。
+
 对 v3「wt pane 编排器」方案的重新审查结论：其中大部分机制（Rust pane 编排、5 种就绪门、finish 哨兵、process 探测、prelude）是为「跨进程就绪依赖」这一**低频需求**引入的技术派生复杂度，不属于用户核心能力，还引入了新的失败模式（假就绪、超时中断、关窗重建）。故推翻重设计。
 
 最小架构一句话：**项目 = 一组启动项；每个启动项 = 一个真实终端里的一组顺序命令；一键 = 一次 wt 调用开出全部窗格。**
@@ -39,13 +41,22 @@
 - `settings` 仅保留 `autostart`；`readyTimeoutSec` 删除（旧配置中的该字段被 serde 忽略）。
 - 字段一律 camelCase，serde / TS 双侧锁定（延续既有约定）。
 
-## 3. 执行模型
+## 3. 启动逻辑（行为契约）
 
-`launch_project(projectId)`：
+1. 校验项目与每个启动项的 `workDir` 存在。
+2. 为每个启动项构造真实 Terminal 命令（cmd / PowerShell 方言）。
+3. 优先使用 Windows Terminal。
+4. 一次 `wt` 调用创建一个窗口，并为每个启动项创建一个 pane。
+5. 每个启动项内部命令保持同一个 shell 会话；多行命令按用户手动执行的语义连续执行。
+6. 所有启动项默认并行启动（同一 wt 调用中的 pane 同时拉起）。
+7. Rust 不等待、不轮询、不监控、不判断服务是否成功。
+8. wt spawn 成功后，启动流程立即结束。
+9. 命令失败、服务崩溃等情况全部留在真实终端中，由用户查看。
+10. wt 不存在时降级为多个独立终端窗口，产品语义保持一致。
 
-1. 预校验：项目存在；启动项非空；每个启动项的 `workDir` 存在。
-2. 构造**一条** wt 命令（首项 `nt`，其余 `sp -V`），一次 spawn，fire-and-forget。
-3. 系统通知「已启动「X」N 个窗格」。
+实现细节：
+
+- 一条 wt 命令：首项 `nt`，其余 `sp -V`，一次 spawn。
 
 示例（XingTu）：
 
@@ -59,6 +70,7 @@ wt -w -1 nt -d "D:\Projects\XINGTU\backend"  --title "后端" --suppressApplicat
 - **降级**：wt 不可用时改为每项独立窗口 spawn——cmd 用 `CREATE_NEW_CONSOLE` + `/K`，PowerShell 用 `-NoExit -EncodedCommand`；语义不变，仅变多窗口，并发送通知说明。
 - 单启动项运行：同样的构造，items 取子集（单独窗口）。
 - 重复启动 = 新窗口；关闭窗口 = 该窗全部服务结束（与手动操作一致）。
+- 系统通知：spawn 成功 →「已启动「X」N 个窗格」；spawn 失败 → 通知原因。
 
 ## 4. 命令投递规范
 
@@ -91,13 +103,12 @@ powershell（`shell: "powershell"`）：
 
 ## 6. 迁移 v1/v2 → v3
 
-- `groups[] → items[]`：每个分组变成一个启动项，名称沿用组名；**首个步骤的 workDir 作为 item.workDir**。
-- 组内 steps 命令**按序拼接**为多行 `command`；若后一步 workDir 与前一步不同，在拼接处插入 `cd /d "<解析后的绝对路径>"`（cmd）或 `Set-Location -LiteralPath '<...>'`（powershell）。
+- `CONFIG_VERSION = 3`；v1 / v2 配置与模板在加载时自动迁移（内存迁移，下次保存落盘）。
+- `groups[] → items[]`：每个分组变成一个启动项，名称沿用组名；同一 group 内连续步骤的命令**合并到同一个启动项**（按序拼接为多行 `command`）。
+- 若后一步 workDir 与前一步不同，在拼接处插入 `cd /d "<解析后的绝对路径>"`（cmd）或 `Set-Location -LiteralPath '<...>'`（powershell）。
 - 激活类步骤（如 `conda activate xingtu`）自然成为 command 的第一行，无需特殊处理。
-- `readyCondition` 一律丢弃（v2 中它们要么是死代码，要么是装饰性等待；文档说明）。
-- `shell` = 组 terminal（v1 取该步 terminal）；`windowsterminal` → `cmd`。
+- **删除已废弃配置字段**：`readyCondition` 全部丢弃、组 / 步骤层级结构删除；`shell` = 组 terminal（v1 取该步 terminal）；`windowsterminal` → `cmd`。
 - `ProjectTemplate.version < 3` 导入时执行同一迁移；导出写 v3。
-- 迁移在内存完成；下次保存落盘为 v3。
 
 ## 7. 项目内配置分发（保留自 v3）
 
@@ -117,7 +128,7 @@ powershell（`shell: "powershell"`）：
 
 ## 9. 明确不做与延后
 
-不做：跨进程就绪门控、进程监控 / 清理、pane 布局配置、跨项目编排、输出匹配、内嵌终端、macOS / Linux、自动更新。
+不做：编排线程与启动状态机、哨兵文件、跨进程就绪门控、进程监控 / 清理、pane 布局配置、跨项目编排、输出匹配、内嵌终端、macOS / Linux、自动更新。
 
 延后（插入点已想清）：若未来确认需要「等服务就绪再启动别的」，实现为启动项的可选「启动前等待」（在该窗格命令前内联等待块，如端口轮询 one-liner），**不恢复 v3 的编排体系**。
 
