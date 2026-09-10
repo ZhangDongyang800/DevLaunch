@@ -4,13 +4,13 @@ use crate::tray;
 use crate::AppState;
 use std::fs;
 use std::path::Path;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 use tauri_plugin_autostart::ManagerExt;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Group, Project, Step, Terminal};
+    use crate::config::{Item, Project, Shell};
 
     #[test]
     fn subdirs_lists_only_directories_sorted() {
@@ -32,18 +32,12 @@ mod tests {
             id: id.into(),
             name: "PVDS".into(),
             root_dir: r"D:\Projects\PVDS".into(),
-            groups: vec![Group {
-                id: "g1".into(),
-                name: "默认".into(),
-                terminal: Terminal::Cmd,
-                steps: vec![Step {
-                    id: "s1".into(),
-                    name: "server".into(),
-                    work_dir: Some("server".into()),
-                    terminal: Terminal::Cmd,
-                    command: "python app.py".into(),
-                    ready_condition: crate::config::ReadyCondition::Immediate,
-                }],
+            items: vec![Item {
+                id: "i1".into(),
+                name: "server".into(),
+                work_dir: Some("server".into()),
+                shell: Shell::Cmd,
+                command: "python app.py".into(),
             }],
         }
     }
@@ -61,7 +55,7 @@ mod tests {
         assert!(!text.contains("rootDir"));
         assert!(!text.contains("p2"));
         let tpl = read_template(&path).unwrap();
-        assert_eq!(tpl.groups.len(), 1);
+        assert_eq!(tpl.items.len(), 1);
         assert!(!path.with_extension("json.tmp").exists());
     }
 
@@ -78,6 +72,18 @@ mod tests {
         let path = dir.path().join("bad.json");
         fs::write(&path, "{ not valid json").unwrap();
         assert!(read_template(&path).is_err());
+    }
+
+    #[test]
+    fn export_project_file_writes_to_root() {
+        let mut cfg = AppConfig::default();
+        let dir = tempfile::tempdir().unwrap();
+        let mut p = sample_project("p1");
+        p.root_dir = dir.path().to_string_lossy().to_string();
+        cfg.projects.push(p);
+        let path = Path::new(&cfg.projects[0].root_dir).join("devlaunch.json");
+        export_project_to(&cfg, "p1", &path).unwrap();
+        assert!(path.is_file());
     }
 }
 
@@ -100,38 +106,13 @@ pub fn save_config(app: AppHandle, state: State<AppState>, config: AppConfig) ->
 #[tauri::command]
 pub fn launch_project_cmd(app: AppHandle, state: State<AppState>, project_id: String) -> Result<(), String> {
     let cfg = state.config.lock().unwrap().clone();
-    std::thread::spawn(move || {
-        let result = launcher::launch_project(&app, &cfg, &project_id);
-        let _ = app.emit("launch-result", result.err());
-    });
-    Ok(())
+    launcher::launch_project(&app, &cfg, &project_id)
 }
 
 #[tauri::command]
-pub fn launch_group_cmd(
-    app: AppHandle,
-    state: State<AppState>,
-    project_id: String,
-    group_id: String,
-) -> Result<(), String> {
+pub fn launch_item_cmd(app: AppHandle, state: State<AppState>, project_id: String, item_id: String) -> Result<(), String> {
     let cfg = state.config.lock().unwrap().clone();
-    std::thread::spawn(move || {
-        let result = launcher::launch_group(&app, &cfg, &project_id, &group_id);
-        let _ = app.emit("launch-result", result.err());
-    });
-    Ok(())
-}
-
-#[tauri::command]
-pub fn run_step(
-    app: AppHandle,
-    state: State<AppState>,
-    project_id: String,
-    group_id: String,
-    step_id: String,
-) -> Result<(), String> {
-    let cfg = state.config.lock().unwrap().clone();
-    launcher::run_step(&app, &cfg, &project_id, &group_id, &step_id)
+    launcher::launch_item(&app, &cfg, &project_id, &item_id)
 }
 
 #[tauri::command]
@@ -166,6 +147,19 @@ pub fn export_project_to(cfg: &AppConfig, project_id: &str, path: &Path) -> Resu
 }
 
 #[tauri::command]
+pub fn export_project_file(state: State<AppState>, project_id: String) -> Result<String, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let project = cfg.projects.iter().find(|p| p.id == project_id)
+        .ok_or_else(|| format!("项目不存在：{project_id}"))?;
+    if project.root_dir.trim().is_empty() {
+        return Err("项目未设置根目录".into());
+    }
+    let path = Path::new(&project.root_dir).join("devlaunch.json");
+    export_project_to(&cfg, &project_id, &path)?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 pub fn read_project_template(path: String) -> Result<ProjectTemplate, String> {
     read_template(Path::new(&path))
 }
@@ -182,9 +176,7 @@ pub fn export_config_to(state: State<AppState>, path: String) -> Result<(), Stri
 #[tauri::command]
 pub fn import_config_from(app: AppHandle, state: State<AppState>, path: String) -> Result<(), String> {
     let text = fs::read_to_string(&path).map_err(|e| format!("读取失败：{e}"))?;
-    let cfg: AppConfig =
-        serde_json::from_str(&text).map_err(|e| format!("配置文件格式错误：{e}"))?;
-    let cfg = AppConfig::migrate_if_needed(cfg);
+    let cfg = crate::config::parse_config(&text).map_err(|e| format!("配置文件格式错误：{e}"))?;
     {
         let mut guard = state.config.lock().unwrap();
         *guard = cfg;

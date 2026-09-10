@@ -2,7 +2,6 @@ pub mod commands;
 pub mod config;
 pub mod launcher;
 pub mod platform;
-pub mod ready;
 pub mod tray;
 
 use config::AppConfig;
@@ -47,12 +46,12 @@ pub fn run() {
             commands::save_config,
             commands::list_subdirs,
             commands::launch_project_cmd,
-            commands::launch_group_cmd,
-            commands::run_step,
+            commands::launch_item_cmd,
             commands::open_dir,
             commands::export_config_to,
             commands::import_config_from,
             commands::export_project,
+            commands::export_project_file,
             commands::read_project_template,
             commands::get_autostart,
             commands::set_autostart,
