@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-Windows 托盘常驻的「开发项目快速启动器」：一次配置项目/分组/步骤，点击按钮自动打开真实终端、进入目录并按就绪条件顺序执行命令。Tauri 2 + Rust + Vue 3 + TS。产品说明见 `docs/PRODUCT.md`，设计 spec 见 `docs/superpowers/specs/2026-09-09-devlaunch-design.md`。README.md 是 Tauri 模板占位，可直接忽略。
+Windows 托盘常驻的「开发项目一键重放器」：一次配置项目的启动项（名称/目录/命令/方言），点击按钮一次 `wt` 调用打开一个 Windows Terminal 窗口、每个启动项一个窗格并行执行命令；`wt` 缺失时降级为独立终端窗口。Tauri 2 + Rust + Vue 3 + TS。产品说明见 `docs/PRODUCT.md`，设计 spec 见 `docs/superpowers/specs/2026-09-10-devlaunch-v3-minimal-design.md`。README.md 是 Tauri 模板占位，可直接忽略。
 
 ## Environment quirks（必须知道）
 
@@ -14,7 +14,7 @@ Windows 托盘常驻的「开发项目快速启动器」：一次配置项目/�
 
 ```bash
 npm run build          # vue-tsc 类型检查 + vite build（前端验收的唯一门槛）
-cargo test             # 在 src-tauri/ 下；32 个单测（config/platform/ready/launcher/commands）
+cargo test             # 在 src-tauri/ 下；29 个单测（config/platform/launcher/commands）
 npm run tauri dev      # 运行调试版（主窗口自动显示）
 npm run tauri build    # release 构建（~4min）；产物 src-tauri/target/release/devlaunch.exe
                        #   安装包 bundle/msi/*.msi 与 bundle/nsis/*-setup.exe
@@ -29,15 +29,19 @@ npm run tauri build    # release 构建（~4min）；产物 src-tauri/target/rel
 ```
 src-tauri/src/
 ├── config.rs    # 数据模型 + 原子读写（temp+rename）。损坏→备份 *.json.corrupt-<ts>→回默认
-│                # CONFIG_VERSION=2：terminal 是分组属性（一组=一个终端）；v1 配置/导入自动迁移（取组内第一个非 cmd 步骤）
-├── platform/    # 终端抽象。spawn_script(terminal, workDir, script)→真实终端窗口执行临时脚本
-│   └── windows.rs # cmd/wt 走 `cmd /K call`、powershell 走 `-File`；raw_arg 原样拼接；join_lines 多行合并
-├── ready.rs     # 就绪条件→脚本内等待块转译（不再同步轮询）：cmd 借 powershell one-liner，ps 原生代码块；超时 echo+pause 停住
-├── launcher.rs  # 编排：build_group_script 把组内步骤(cd/命令/等待块)生成临时脚本，一次 spawn；Rust 不再等待
-├── commands.rs  # 13 个 IPC 命令（launch_* 在后台线程，完成 emit "launch-result" err 侧）
-│                 # 单项目导入导出：export_project + read_project_template（只读不落盘，前端经 save_config 统一写入）
-│                 # 另有 list_subdirs（workDir 子目录选择器）、get/set_autostart（tauri-plugin-autostart）
-├── tray.rs      # 托盘菜单从配置构建；菜单 ID 约定 launch:<id>/open:<id>/show/quit
+│                # CONFIG_VERSION=3：Project{id,name,rootDir,items[]}／Item{id,name,workDir?,shell:cmd|powershell,command}
+│                # v1/v2 配置与模板加载时自动迁移：组→启动项、组内步骤合并为一个多行 command
+│                # （workDir 变化处插 cd 行）、readyCondition 丢弃、windowsterminal→cmd
+├── platform/    # 终端抽象（仅 Windows）
+│   └── windows.rs # wt 解析顺序 DEVLAUNCH_WT_PATH → PATH → %LOCALAPPDATA%\Microsoft\WindowsApps\wt.exe
+│                # build_wt_commandline：`-w -1`，首项 `nt -d ... --title 项目名`，其余 `; sp -V -d ... --title 项名`
+│                # cmd 窗格命令多行折叠 ` && `、`cd /d` 后整体加引号进 `cmd /K "..."`；ps 走 -EncodedCommand（UTF-16LE Base64）
+│                # 一次 raw_arg spawn；wt 缺失降级为每项独立窗口（CREATE_NEW_CONSOLE）
+├── launcher.rs  # build_panes（校验 items 非空 + workDir 存在）→ platform::spawn_panes → 通知（成功/降级/失败）
+├── commands.rs  # 13 个 IPC 命令：get_config/save_config/list_subdirs/launch_project_cmd/launch_item_cmd/open_dir/
+│                # export_config_to/import_config_from/export_project/export_project_file/read_project_template/
+│                # get_autostart/set_autostart（launch_* 为同步：校验+spawn 完即返回，无事件、无等待）
+├── tray.rs      # 托盘菜单从配置构建；菜单 ID 约定 launch:<id>/open:<id>/show/quit；launch 在后台线程
 └── lib.rs       # AppState{config: Mutex, path}；插件注册；关窗=hide 不退出
 ```
 
@@ -47,22 +51,24 @@ src-tauri/src/
 2. **save_config / import_config_from 成功后必须调 `tray::rebuild(app)`**，否则托盘菜单过期。
 3. **IPC 命令名与参数**在 `commands.rs`（Rust snake_case 命令名 + camelCase 参数）与 `src/api.ts` 必须逐字一致；Tauri 自动做 camelCase 转换，前端 invoke 参数用 camelCase。
 4. **前端插件调用需要 capability 权限**（`src-tauri/capabilities/default.json`）：缺权限**编译不报错、运行时才失败**。dialog 用了 `dialog:default`；自绘标题栏用了 `core:window:allow-minimize/hide/start-dragging/is-maximized/maximize/unmaximize/toggle-maximize`（双击拖拽区最大化也依赖 toggle-maximize 权限）。
-5. **launch-result 事件**载荷是 `Option<String>`（err 侧）：null=成功，Some=错误。App.vue 监听并 toast。
-6. **就绪条件**是 serde tagged enum（`{"type":"port",...}`），TS 侧对应判别联合（`src/types.ts`）。字段：`seconds` / `port`+`host`+`timeoutSec` / `processName`+`timeoutSec`。**没有输出匹配**（有意砍掉，勿加）。**v2 语义：等待发生在终端窗口内**（转译为脚本块），Rust 不再同步等待——「未就绪」只出现在终端里，系统通知不再报。
-7. **终端命令行用 `raw_arg` 整体拼接**；cmd/powershell 加 `CREATE_NEW_CONSOLE`，wt 不加。**一组=一个终端**：组内步骤生成临时脚本（`%TEMP%\devlaunch-group-<id>.cmd/.ps1`，按组固定名覆盖写、不累积）。**编码：cmd 脚本按 GBK 直写**（encoding_rs），**绝不要写 `chcp 65001`**——实测 chcp 65001 会破坏 conda.bat 激活（RC=3，Activation file missing）；ps1 写 UTF-8 BOM；cmd 含不可 GBK 编码字符时才回退 UTF-8+chcp。`cmd /K call` 或 `-File` 执行；`Step.terminal` 字段仅为 v1 兼容保留，运行时忽略（用 `Group.terminal`）。脚本 echo 消息走 `safe_label` 过滤 `& | < > ( )` 等字符（batch/PS 语法安全）。**cmd 方言的步骤命令必须加 `call ` 前缀**（`launcher.rs::call_prefixed`）：batch 内调另一个 batch（conda.bat/npm.cmd）不加 call 会转移控制权且不返回，吞掉后续步骤——conda/npm 全中招。
-8. **无边框窗口**：`decorations:false`；拖拽靠 `data-tauri-drag-region`；`body{user-select:none}` 但 input 已恢复 `user-select:text`。
+5. **CONFIG_VERSION=3**：模型只有 `Project{id,name,rootDir,items[]}` 与 `Item{id,name,workDir?,shell,command}`；`settings` 只有 `autostart`。**不要重新引入 group/step/readyCondition/readyTimeoutSec/pane 配置等字段**；v1/v2 配置与模板靠 `config.rs` 的迁移路径兼容。
+6. **一次 wt 调用 = 一个窗口**：`build_wt_commandline` 用 `-w -1`，首项 `nt`、其余 `; sp -V`，每个启动项一个 pane，并行启动。**命令行经 `raw_arg` 整体拼接、不经任何 shell**；cmd 窗格命令是 `cd /d "<dir>" && <多行折叠>` 整体作为 `cmd /K "<...>"` 的参数（引号是 wt 解析的关键，改动必须跑 `cmd_pane_command` 单测 + 实机冒烟）。PowerShell 走 `-EncodedCommand`（UTF-16LE Base64），引号零风险。命令行 >30000 字符报错提示拆分启动项。
+7. **wt 缺失降级**：`resolve_wt_path` 为空时改为每项一个独立窗口（`CREATE_NEW_CONSOLE`；cmd `cmd /K`、ps `-NoExit -EncodedCommand`）并通知；`DEVLAUNCH_WT_PATH` 设为**空字符串 = 强制禁用 wt**（用于验证降级路径）。
+8. **Rust 不等待、不轮询、不监控**：`ready.rs` 已删除，`launch_*` 命令同步返回。等待请在用户的命令里自己写（cmd `timeout /t 5 /nobreak >nul`；ps `Start-Sleep -Seconds 5`）。**不要重新引入任何门控/轮询/进程探测/事件上报逻辑。**
+9. **无边框窗口**：`decorations:false`；拖拽靠 `data-tauri-drag-region`；`body{user-select:none}` 但 input 已恢复 `user-select:text`。
 
 ## Frontend conventions
 
 - 设计系统在 `src/style.css`（深色控制台）：近黑三层背景、**信号绿 `--signal`**（启动/成功/焦点）、`--mono: Cascadia Code` 用于命令/路径/项目名/序号，正文 `--sans`。改样式先看 tokens。
-- 首页项目卡**整卡点击=启动**；编辑器是垂直时间线（序号圆点+连线+门槛提示）。
+- 首页项目卡**整卡点击=启动**；卡片内启动项标签用 `·` 分隔。编辑器是启动项列表（序号+名称+目录下拉+多行命令+shell）；「运行此项」单启前先 `persist()`。
 - toast 分类型：`emit('notify', msg, 'err')` 红边，默认绿边。
 - store（`src/store.ts`）是模块级单例 `config` ref；`persist()` 深拷贝后 save_config。
+- 项目文件分发：编辑器「导出到项目根」写 `<rootDir>\devlaunch.json`（v3 模板、无 rootDir）；「导入」经 `read_project_template` 只读，写入统一走 save_config。
 
 ## Testing status
 
-- 有单测：config（serde/原子写/损坏备份/v1→v2 迁移/ProjectTemplate）、platform（join_lines/脚本命令行）、ready（等待块转译）、launcher（脚本组装/文件命名/BOM+chcp）、commands（subdirs/项目导出/坏 JSON）。
-- **无单测**（人工冒烟验收）：真实终端窗口行为、tray、前端交互、IPC 全链路。
+- 有单测（29）：config（serde 大小写/原子写/损坏备份/v1·v2→v3 迁移/ProjectTemplate）、platform（cmd 折叠与 cd、ps 脚本与 EncodedCommand、wt 命令行构造、降级启动参数、wt 解析优先级、超长校验）、launcher（build_panes 的 workDir 解析与目录校验）、commands（subdirs/项目导出/导出到项目根/坏 JSON）。
+- **无单测**（人工冒烟验收）：真实终端窗口行为（wt 引号链、多窗格并行）、降级路径、tray、前端交互、IPC 全链路。
 
 ## Misc
 
