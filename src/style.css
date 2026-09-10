@@ -204,7 +204,8 @@ button.danger { color: var(--danger); }
 button.danger:hover { background: var(--danger-dim); }
 
 button.bordered.confirming,
-button.danger.confirming {
+button.danger.confirming,
+button.ghost.confirming {
   border-color: var(--danger);
   background: var(--danger-dim);
   color: var(--danger);

@@ -25,8 +25,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1", features = ["v4"] }
-sysinfo = "0.33"
+encoding_rs = "0.8"
 
 [dev-dependencies]
 tempfile = "3"

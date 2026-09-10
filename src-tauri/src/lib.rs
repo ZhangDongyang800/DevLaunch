@@ -52,6 +52,8 @@ pub fn run() {
             commands::open_dir,
             commands::export_config_to,
             commands::import_config_from,
+            commands::export_project,
+            commands::read_project_template,
             commands::get_autostart,
             commands::set_autostart,
         ])

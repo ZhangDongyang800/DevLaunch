@@ -1,4 +1,4 @@
-use crate::config::AppConfig;
+use crate::config::{AppConfig, ProjectTemplate};
 use crate::launcher;
 use crate::tray;
 use crate::AppState;
@@ -10,6 +10,7 @@ use tauri_plugin_autostart::ManagerExt;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{Group, Project, Step, Terminal};
 
     #[test]
     fn subdirs_lists_only_directories_sorted() {
@@ -24,6 +25,59 @@ mod tests {
     #[test]
     fn subdirs_errors_on_missing_path() {
         assert!(subdirs(r"Z:\definitely-missing-xyz-12345").is_err());
+    }
+
+    fn sample_project(id: &str) -> Project {
+        Project {
+            id: id.into(),
+            name: "PVDS".into(),
+            root_dir: r"D:\Projects\PVDS".into(),
+            groups: vec![Group {
+                id: "g1".into(),
+                name: "默认".into(),
+                terminal: Terminal::Cmd,
+                steps: vec![Step {
+                    id: "s1".into(),
+                    name: "server".into(),
+                    work_dir: Some("server".into()),
+                    terminal: Terminal::Cmd,
+                    command: "python app.py".into(),
+                    ready_condition: crate::config::ReadyCondition::Immediate,
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn export_project_writes_template_without_root_dir() {
+        let mut cfg = AppConfig::default();
+        cfg.projects.push(sample_project("p1"));
+        cfg.projects.push(sample_project("p2"));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pvds.json");
+        export_project_to(&cfg, "p1", &path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"name\": \"PVDS\""));
+        assert!(!text.contains("rootDir"));
+        assert!(!text.contains("p2"));
+        let tpl = read_template(&path).unwrap();
+        assert_eq!(tpl.groups.len(), 1);
+        assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn export_project_errors_on_missing_project() {
+        let cfg = AppConfig::default();
+        let dir = tempfile::tempdir().unwrap();
+        assert!(export_project_to(&cfg, "nope", &dir.path().join("x.json")).is_err());
+    }
+
+    #[test]
+    fn read_template_rejects_bad_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.json");
+        fs::write(&path, "{ not valid json").unwrap();
+        assert!(read_template(&path).is_err());
     }
 }
 
@@ -97,6 +151,30 @@ pub fn open_dir(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn export_project(state: State<AppState>, project_id: String, path: String) -> Result<(), String> {
+    let cfg = state.config.lock().unwrap().clone();
+    export_project_to(&cfg, &project_id, Path::new(&path))
+}
+
+pub fn export_project_to(cfg: &AppConfig, project_id: &str, path: &Path) -> Result<(), String> {
+    let project = cfg
+        .projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("项目不存在：{project_id}"))?;
+    crate::config::save_json(&ProjectTemplate::from_project(project), path)
+}
+
+#[tauri::command]
+pub fn read_project_template(path: String) -> Result<ProjectTemplate, String> {
+    read_template(Path::new(&path))
+}
+
+pub fn read_template(path: &Path) -> Result<ProjectTemplate, String> {
+    ProjectTemplate::load(path)
+}
+
+#[tauri::command]
 pub fn export_config_to(state: State<AppState>, path: String) -> Result<(), String> {
     state.config.lock().unwrap().save(Path::new(&path))
 }
@@ -104,7 +182,9 @@ pub fn export_config_to(state: State<AppState>, path: String) -> Result<(), Stri
 #[tauri::command]
 pub fn import_config_from(app: AppHandle, state: State<AppState>, path: String) -> Result<(), String> {
     let text = fs::read_to_string(&path).map_err(|e| format!("读取失败：{e}"))?;
-    let cfg: AppConfig = serde_json::from_str(&text).map_err(|e| format!("配置文件格式错误：{e}"))?;
+    let cfg: AppConfig =
+        serde_json::from_str(&text).map_err(|e| format!("配置文件格式错误：{e}"))?;
+    let cfg = AppConfig::migrate_if_needed(cfg);
     {
         let mut guard = state.config.lock().unwrap();
         *guard = cfg;

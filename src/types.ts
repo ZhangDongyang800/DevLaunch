@@ -20,6 +20,7 @@ export interface Step {
 export interface Group {
   id: string
   name: string
+  terminal: Terminal
   steps: Step[]
 }
 
@@ -41,6 +42,12 @@ export interface AppConfig {
   projects: Project[]
 }
 
+export interface ProjectTemplate {
+  version: number
+  name: string
+  groups: Group[]
+}
+
 export type ToastKind = 'ok' | 'err'
 
 export function newId(): string {
@@ -52,5 +59,5 @@ export function newStep(): Step {
 }
 
 export function newGroup(index: number): Group {
-  return { id: newId(), name: `组 ${index + 1}`, steps: [] }
+  return { id: newId(), name: `组 ${index + 1}`, terminal: 'cmd', steps: [] }
 }
