@@ -94,12 +94,28 @@ async function tryAutoImport() {
   }
 }
 
+const confirmExport = ref(false)
+let confirmExportTimer: number | undefined
+
 async function doExportToRoot() {
   const path = projectFilePath()
   if (!path) { emit('notify', '请先设置项目根目录', 'err'); return }
+  if (!confirmExport.value) {
+    confirmExport.value = true
+    clearTimeout(confirmExportTimer)
+    confirmExportTimer = window.setTimeout(() => (confirmExport.value = false), 3000)
+    return
+  }
+  clearTimeout(confirmExportTimer)
+  confirmExport.value = false
   try {
     await persist()
     savedSnapshot.value = JSON.stringify(project.value)
+  } catch (e) {
+    emit('notify', `保存失败：${e}`, 'err')
+    return
+  }
+  try {
     await exportProjectFile(project.value.id)
     emit('notify', `已导出到 ${path}`)
   } catch (e) {
@@ -131,7 +147,14 @@ async function doImport() {
       <span v-if="dirty" class="dirty-dot" title="有未保存的更改" />
       <input v-model="project.name" class="editor-title grow" placeholder="项目名称" />
       <button class="ghost" title="从项目配置文件导入（覆盖启动项，保留根目录）" @click="doImport">导入</button>
-      <button class="ghost" title="导出为项目根目录下的 devlaunch.json" @click="doExportToRoot">导出到项目根</button>
+      <button
+        class="ghost"
+        :class="{ confirming: confirmExport }"
+        title="导出为项目根目录下的 devlaunch.json"
+        @click="doExportToRoot"
+      >
+        {{ confirmExport ? '确认覆盖？' : '导出到项目根' }}
+      </button>
       <button class="primary" @click="save">保存</button>
     </div>
 

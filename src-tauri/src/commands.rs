@@ -126,7 +126,7 @@ pub fn open_dir(path: String) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        return Err("open_dir 仅支持 Windows（v1）".into());
+        return Err("open_dir 仅支持 Windows".into());
     }
     Ok(())
 }

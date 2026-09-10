@@ -95,18 +95,34 @@ fn backup_corrupt(path: &Path) -> std::io::Result<()> {
     fs::rename(path, bak)
 }
 
-/// 版本探测后选择 v3 直接解析或 legacy 迁移（v1/v2）。
-pub fn parse_config(text: &str) -> Result<AppConfig, serde_json::Error> {
-    #[derive(Deserialize)]
-    struct VersionProbe {
-        #[serde(default)]
-        version: u32,
+/// 版本探测后选择 v3 直接解析或 legacy 迁移（v1/v2）；无 version 但含 items 视为 v3。
+fn has_items_key(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.contains_key("items") || map.values().any(has_items_key)
+        }
+        serde_json::Value::Array(arr) => arr.iter().any(has_items_key),
+        _ => false,
     }
-    let probe: VersionProbe = serde_json::from_str(text)?;
-    if probe.version >= CONFIG_VERSION {
-        serde_json::from_str(text)
+}
+
+fn probe_v3(value: &serde_json::Value) -> bool {
+    match value.get("version").and_then(serde_json::Value::as_u64) {
+        Some(v) => v >= u64::from(CONFIG_VERSION),
+        None => has_items_key(value),
+    }
+}
+
+pub fn parse_config(text: &str) -> Result<AppConfig, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(text)?;
+    if probe_v3(&value) {
+        let mut cfg: AppConfig = serde_json::from_value(value)?;
+        if cfg.version < CONFIG_VERSION {
+            cfg.version = CONFIG_VERSION;
+        }
+        Ok(cfg)
     } else {
-        let legacy: LegacyAppConfig = serde_json::from_str(text)?;
+        let legacy: LegacyAppConfig = serde_json::from_value(value)?;
         Ok(legacy.into_v3())
     }
 }
@@ -295,16 +311,15 @@ impl ProjectTemplate {
 }
 
 pub fn parse_template(text: &str) -> Result<ProjectTemplate, serde_json::Error> {
-    #[derive(Deserialize)]
-    struct VersionProbe {
-        #[serde(default)]
-        version: u32,
-    }
-    let probe: VersionProbe = serde_json::from_str(text)?;
-    if probe.version >= CONFIG_VERSION {
-        serde_json::from_str(text)
+    let value: serde_json::Value = serde_json::from_str(text)?;
+    if probe_v3(&value) {
+        let mut tpl: ProjectTemplate = serde_json::from_value(value)?;
+        if tpl.version < CONFIG_VERSION {
+            tpl.version = CONFIG_VERSION;
+        }
+        Ok(tpl)
     } else {
-        let legacy: LegacyTemplate = serde_json::from_str(text)?;
+        let legacy: LegacyTemplate = serde_json::from_value(value)?;
         Ok(legacy.into_v3())
     }
 }
@@ -485,6 +500,32 @@ mod tests {
         assert!(json.contains("\"items\""));
         assert!(!json.contains("groups"));
         assert!(!json.contains("readyCondition"));
+    }
+
+    #[test]
+    fn versionless_v3_config_with_items_parses() {
+        let json = r#"{
+            "settings": {"autostart": true},
+            "projects": [{
+                "id": "p1", "name": "XingTu", "rootDir": "D:\\proj",
+                "items": [{"id": "i1", "name": "后端", "workDir": "backend", "shell": "cmd", "command": "python app.py"}]
+            }]
+        }"#;
+        let cfg = parse_config(json).unwrap();
+        assert_eq!(cfg.version, CONFIG_VERSION);
+        assert_eq!(cfg.projects[0].items.len(), 1);
+        assert_eq!(cfg.projects[0].items[0].work_dir.as_deref(), Some("backend"));
+        assert_eq!(cfg.projects[0].items[0].command, "python app.py");
+    }
+
+    #[test]
+    fn versionless_v3_template_with_items_parses() {
+        let json = r#"{"name":"XingTu","items":[{"id":"i1","name":"后端","shell":"cmd","command":"python app.py"}]}"#;
+        let tpl = parse_template(json).unwrap();
+        assert_eq!(tpl.version, CONFIG_VERSION);
+        assert_eq!(tpl.name, "XingTu");
+        assert_eq!(tpl.items.len(), 1);
+        assert_eq!(tpl.items[0].command, "python app.py");
     }
 
     #[test]

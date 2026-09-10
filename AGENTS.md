@@ -14,7 +14,7 @@ Windows 托盘常驻的「开发项目一键重放器」：一次配置项目的
 
 ```bash
 npm run build          # vue-tsc 类型检查 + vite build（前端验收的唯一门槛）
-cargo test             # 在 src-tauri/ 下；29 个单测（config/platform/launcher/commands）
+cargo test             # 在 src-tauri/ 下；41 个单测（config/platform/launcher/commands）
 npm run tauri dev      # 运行调试版（主窗口自动显示）
 npm run tauri build    # release 构建（~4min）；产物 src-tauri/target/release/devlaunch.exe
                        #   安装包 bundle/msi/*.msi 与 bundle/nsis/*-setup.exe
@@ -47,7 +47,7 @@ src-tauri/src/
 
 **硬性约定（违反会出 bug）：**
 
-1. **配置单一写者**：所有配置变更（前端保存、导入、托盘）都经 Rust `Mutex<AppConfig>`；前端是纯编辑器，绝不持有独立持久化状态。
+1. **配置单一写者**：所有配置变更（前端保存、导入）都经 Rust `Mutex<AppConfig>`；前端是纯编辑器，绝不持有独立持久化状态。
 2. **save_config / import_config_from 成功后必须调 `tray::rebuild(app)`**，否则托盘菜单过期。
 3. **IPC 命令名与参数**在 `commands.rs`（Rust snake_case 命令名 + camelCase 参数）与 `src/api.ts` 必须逐字一致；Tauri 自动做 camelCase 转换，前端 invoke 参数用 camelCase。
 4. **前端插件调用需要 capability 权限**（`src-tauri/capabilities/default.json`）：缺权限**编译不报错、运行时才失败**。dialog 用了 `dialog:default`；自绘标题栏用了 `core:window:allow-minimize/hide/start-dragging/is-maximized/maximize/unmaximize/toggle-maximize`（双击拖拽区最大化也依赖 toggle-maximize 权限）。
@@ -67,7 +67,7 @@ src-tauri/src/
 
 ## Testing status
 
-- 有单测（29）：config（serde 大小写/原子写/损坏备份/v1·v2→v3 迁移/ProjectTemplate）、platform（cmd 折叠与 cd、ps 脚本与 EncodedCommand、wt 命令行构造、降级启动参数、wt 解析优先级、超长校验）、launcher（build_panes 的 workDir 解析与目录校验）、commands（subdirs/项目导出/导出到项目根/坏 JSON）。
+- 有单测（41）：config（serde 大小写/原子写/损坏备份/v1·v2→v3 迁移/无 version 的 v3 探测/ProjectTemplate）、platform（cmd 折叠与 cd、ps 脚本与 EncodedCommand、转义矩阵、wt 命令行构造、plan_spawn 计划、降级启动参数、wt 解析优先级与分支、UTF-16 超长校验）、launcher（build_panes 的 workDir 归一化解析与目录校验）、commands（subdirs/项目导出/导出到项目根/坏 JSON）。
 - **无单测**（人工冒烟验收）：真实终端窗口行为（wt 引号链、多窗格并行）、降级路径、tray、前端交互、IPC 全链路。
 
 ## Misc
