@@ -1,7 +1,7 @@
 # DevLaunch v3 设计文档（最小架构）：启动项直启
 
 日期：2026-09-10
-状态：待用户复核
+状态：已确认（2026-09-10；实现落地见 `docs/superpowers/plans/2026-09-10-devlaunch-v3-minimal.md`）
 取代：`2026-09-10-devlaunch-v3-panes-design.md`（wt pane 编排器，已废弃）
 关联：`docs/PRODUCT.md`
 
@@ -89,16 +89,16 @@ powershell（`shell: "powershell"`）：
 
 兜底预案（不改变用户模型）：若测试矩阵证明个别 cmd 形态经 wt 传递不可靠，启用其一——① 环境变量传输（命令经进程环境传入，窗格侧用固定文本展开）；② 单行临时脚本 `cmd /K call "%TEMP%\devlaunch-item-<id>.cmd"`。
 
-## 5. 失败语义与事件
+## 5. 失败语义
 
-| 事件 | 行为 |
+| 情况 | 行为 |
 |---|---|
-| 项目 / 目录不存在 | `launch-result` 返回 Some(err)，不启动 |
-| wt 不可用 | 降级多窗口启动 + 通知；不算失败 |
-| spawn 失败 | 系统通知（项目 / 原因）；不影响已开窗口 |
-| 命令自身失败 / 退出 | 留在窗格内可见；启动器不干预（无监控、无重试） |
+| 项目 / 目录不存在 | `launch_project_cmd` / `launch_item_cmd` 同步返回 Err，不启动 |
+| wt 不可用 | 降级多窗口启动 + 系统通知；不算失败 |
+| spawn 失败 | 同步返回 Err + 系统通知；不影响已开窗口 |
+| 命令自身失败 / 退出 | 留在终端窗格内可见；启动器不干预（无监控、无重试） |
 
-- `launch-result` 事件载荷不变（`Option<String>`）：null = 启动已受理；Some = 同步校验失败。
+- `launch_*` IPC 为同步调用：校验 + spawn 完成后立即返回 `Result`；**没有 `launch-result` 事件**。
 - 不再有门控超时、哨兵、进程探测相关语义。
 
 ## 6. 迁移 v1/v2 → v3
