@@ -61,7 +61,7 @@ npm run tauri build   # 产物：src-tauri/target/release/
 ```bash
 npm run tauri dev     # 调试运行
 npm run build         # 前端类型检查 + 构建
-cargo test            # Rust 单测（在 src-tauri/ 下，41 个）
+cargo test            # Rust 单测（在 src-tauri/ 下，61 个）
 ```
 
 要求：Windows 10 / 11、Node.js 20.19+ 或 22.12+、Rust（stable，MSVC 工具链）。

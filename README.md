@@ -61,7 +61,7 @@ Use **Export to project root** in the editor to generate `<project root>\devlaun
 ```bash
 npm run tauri dev     # run in dev mode
 npm run build         # frontend type-check + build
-cargo test            # Rust unit tests (in src-tauri/, 41 tests)
+cargo test            # Rust unit tests (in src-tauri/, 61 tests)
 ```
 
 Requirements: Windows 10 / 11, Node.js 20.19+ or 22.12+, Rust (stable, MSVC toolchain).
