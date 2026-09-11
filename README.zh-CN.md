@@ -104,6 +104,36 @@ conda activate app
 python -m uvicorn main:app --reload
 ```
 
+### 配置文件格式（`devlaunch.json`）
+
+```jsonc
+{
+  "version": 3,
+  "name": "MyApp",
+  "items": [
+    {
+      "name": "后端",
+      "workDir": "backend",          // 相对项目根目录；留空 = 根目录
+      "shell": "cmd",                // "cmd" | "powershell"
+      "command": "conda activate app\npython -m uvicorn main:app --reload"
+    }
+  ]
+}
+```
+
+- 启动项 `id` 可以省略，DevLaunch 读取时会自动补齐。
+- 导入 `devlaunch.json` 等于信任其中的命令（配置即代码），只导入你信任的文件。
+
+### 让 AI 帮你生成配置
+
+DevLaunch 不联网、也不需要内建 AI：任何编码代理 / 聊天 AI 都能直接写出 `devlaunch.json`。把下面这段提示词和项目一起丢给它：
+
+```text
+请阅读本项目的 package.json / pyproject.toml / Cargo.toml / go.mod 等项目文件，为我生成一份 devlaunch.json。
+格式：{"version":3,"name":"<项目名>","items":[{"name":"<启动项名>","workDir":"<相对目录，可为空>","shell":"cmd","command":"<按手动操作顺序的多行命令>"}]}
+要求：只包含启动开发服务所需的命令；多行命令用 \n 分隔；不要编造不存在的脚本或服务。
+```
+
 ## 开发
 
 ```bash

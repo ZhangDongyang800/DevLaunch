@@ -104,6 +104,36 @@ conda activate app
 python -m uvicorn main:app --reload
 ```
 
+### Config file format (`devlaunch.json`)
+
+```jsonc
+{
+  "version": 3,
+  "name": "MyApp",
+  "items": [
+    {
+      "name": "Backend",
+      "workDir": "backend",          // relative to the project root; empty = root
+      "shell": "cmd",                // "cmd" | "powershell"
+      "command": "conda activate app\npython -m uvicorn main:app --reload"
+    }
+  ]
+}
+```
+
+- Item `id` is optional; DevLaunch fills it in when reading.
+- Importing a `devlaunch.json` means trusting the commands inside it (config as code). Only import files you trust.
+
+### Let an AI write it for you
+
+DevLaunch is offline and has no built-in AI: any coding agent or chat AI can write `devlaunch.json` directly. Paste this prompt together with your project:
+
+```text
+Read this project's package.json / pyproject.toml / Cargo.toml / go.mod and generate a devlaunch.json for me.
+Format: {"version":3,"name":"<project>","items":[{"name":"<item>","workDir":"<relative dir, may be empty>","shell":"cmd","command":"<multi-line commands in manual order>"}]}
+Rules: include only commands needed to start dev services; separate multiple lines with \n; do not invent scripts or services that do not exist.
+```
+
 ## Development
 
 ```bash
