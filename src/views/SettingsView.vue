@@ -41,12 +41,17 @@ async function doExport() {
 }
 
 async function doImport() {
-  const { open } = await import('@tauri-apps/plugin-dialog')
+  const { open, confirm } = await import('@tauri-apps/plugin-dialog')
   const picked = await open({
     multiple: false,
     filters: [{ name: 'JSON', extensions: ['json'] }],
   })
   if (typeof picked !== 'string') return
+  const ok = await confirm('导入会覆盖当前全部项目配置（现有配置会自动备份），是否继续？', {
+    title: '导入配置',
+    kind: 'warning',
+  })
+  if (!ok) return
   try {
     await importConfigFrom(picked)
     config.value = await getConfig()

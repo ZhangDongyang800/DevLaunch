@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { config, persist } from '../store'
 import { exportProjectFile, launchItem, listSubdirs, readProjectTemplate } from '../api'
-import { newItem, type Item } from '../types'
+import { newId, newItem, type Item } from '../types'
 
 const props = defineProps<{ projectId: string }>()
 const emit = defineEmits<{ back: []; notify: [msg: string, kind?: 'ok' | 'err'] }>()
@@ -11,14 +11,21 @@ const project = computed(() => config.value!.projects.find((p) => p.id === props
 const savedSnapshot = ref(JSON.stringify(project.value))
 const dirty = computed(() => JSON.stringify(project.value) !== savedSnapshot.value)
 
-async function save() {
+async function save(): Promise<boolean> {
   try {
     await persist()
     savedSnapshot.value = JSON.stringify(project.value)
     emit('notify', '已保存')
+    return true
   } catch (e) {
     emit('notify', `保存失败：${e}`, 'err')
+    return false
   }
+}
+
+async function goBack() {
+  if (dirty.value && !(await save())) return
+  emit('back')
 }
 
 function addItem() {
@@ -36,14 +43,25 @@ function moveItem(ii: number, dir: number) {
 }
 
 const subdirs = ref<string[]>([])
+const subdirsError = ref('')
 const openMenuFor = ref('')
+let subdirsTimer: number | undefined
 
 async function refreshSubdirs() {
   const root = project.value?.rootDir
+  subdirsError.value = ''
   if (!root) { subdirs.value = []; return }
-  try { subdirs.value = await listSubdirs(root) } catch { subdirs.value = [] }
+  try {
+    subdirs.value = await listSubdirs(root)
+  } catch (e) {
+    subdirs.value = []
+    subdirsError.value = `${e}`
+  }
 }
-watch(() => project.value?.rootDir, () => refreshSubdirs())
+watch(() => project.value?.rootDir, () => {
+  clearTimeout(subdirsTimer)
+  subdirsTimer = window.setTimeout(() => refreshSubdirs(), 300)
+})
 
 function openCombo(itemId: string) {
   openMenuFor.value = itemId
@@ -55,7 +73,11 @@ function pickWorkDir(it: Item, dir: string) {
   closeCombo()
 }
 
+const runningItemId = ref('')
+
 async function tryRunItem(it: Item) {
+  if (runningItemId.value) return
+  runningItemId.value = it.id
   try {
     await persist()
     savedSnapshot.value = JSON.stringify(project.value)
@@ -63,6 +85,16 @@ async function tryRunItem(it: Item) {
     emit('notify', `已启动「${it.name || '启动项'}」`)
   } catch (e) {
     emit('notify', `${e}`, 'err')
+  } finally {
+    runningItemId.value = ''
+  }
+}
+
+function ensureItemIds(items: Item[]) {
+  const seen = new Set<string>()
+  for (const it of items) {
+    if (!it.id || seen.has(it.id)) it.id = newId()
+    seen.add(it.id)
   }
 }
 
@@ -85,6 +117,7 @@ async function tryAutoImport() {
   try {
     const tpl = await readProjectTemplate(path)
     if (tpl.items.length > 0) {
+      ensureItemIds(tpl.items)
       project.value.name = tpl.name || project.value.name
       project.value.items = tpl.items
       emit('notify', '已从项目根目录 devlaunch.json 导入启动项')
@@ -129,6 +162,7 @@ async function doImport() {
   if (typeof picked !== 'string') return
   try {
     const tpl = await readProjectTemplate(picked)
+    ensureItemIds(tpl.items)
     project.value.name = tpl.name || project.value.name
     project.value.items = tpl.items
     await persist()
@@ -143,7 +177,7 @@ async function doImport() {
 <template>
   <div class="editor" v-if="project">
     <div class="editor-head">
-      <button class="ghost" @click="emit('back')">← 返回</button>
+      <button class="ghost" @click="goBack">← 返回</button>
       <span v-if="dirty" class="dirty-dot" title="有未保存的更改" />
       <input v-model="project.name" class="editor-title grow" placeholder="项目名称" />
       <button class="ghost" title="从项目配置文件导入（覆盖启动项，保留根目录）" @click="doImport">导入</button>
@@ -172,7 +206,7 @@ async function doImport() {
           <option value="cmd">CMD</option>
           <option value="powershell">PowerShell</option>
         </select>
-        <button class="accent" @click="tryRunItem(it)">▶ 运行此项</button>
+        <button class="accent" :disabled="runningItemId !== ''" @click="tryRunItem(it)">▶ 运行此项</button>
         <button class="danger ghost" @click="removeItem(ii)">✕</button>
       </div>
 
@@ -212,7 +246,8 @@ async function doImport() {
                   >
                     {{ d }}
                   </div>
-                  <div v-if="subdirs.length === 0" class="combo-empty">根目录下没有子目录，可手动输入相对路径</div>
+                  <div v-if="subdirsError" class="combo-empty">{{ subdirsError }}</div>
+                  <div v-else-if="subdirs.length === 0" class="combo-empty">根目录下没有子目录，可手动输入相对路径</div>
                 </div>
               </div>
               <span class="spacer" />

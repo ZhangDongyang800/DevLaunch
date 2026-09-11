@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+const MAX_COMMANDLINE_UTF16: usize = 30_000;
 
 #[derive(Debug)]
 pub struct PaneSpec {
@@ -33,14 +34,32 @@ pub enum SpawnPlan {
     Fallback { launches: Vec<FallbackLaunch> },
 }
 
-pub fn fold_cmd_lines(command: &str) -> String {
-    command.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" && ")
+/// 回显文本转义：cmd 元字符加 ^，避免 echo 参数被解析为连接/重定向。
+fn escape_echo_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    for ch in text.chars() {
+        if matches!(ch, '^' | '&' | '|' | '<' | '>') {
+            out.push('^');
+        }
+        out.push(ch);
+    }
+    out
 }
 
+/// 先 cd 到工作目录，再逐行回显「目录>命令」后执行，视觉上等同手动输入。
 pub fn cmd_pane_command(work_dir: &Path, command: &str) -> String {
-    let cd = format!("cd /d \"{}\"", work_dir.display());
-    let folded = fold_cmd_lines(command);
-    if folded.is_empty() { cd } else { format!("{cd} && {folded}") }
+    let dir = work_dir.display().to_string();
+    let cd = format!("cd /d \"{dir}\"");
+    let lines: Vec<&str> = command.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    if lines.is_empty() {
+        return cd;
+    }
+    let mut parts = vec![cd];
+    for line in lines {
+        parts.push(format!("echo {}", escape_echo_text(&format!("{dir}>{line}"))));
+        parts.push(line.to_string());
+    }
+    parts.join(" && ")
 }
 
 pub fn ps_pane_script(work_dir: &Path, command: &str) -> String {
@@ -60,8 +79,14 @@ pub fn encode_ps_command(script: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-fn sanitize_title(title: &str) -> String {
-    title.replace('"', "'")
+/// wt 用 CommandLineToArgvW 解析参数：结尾反斜杠会逃逸收尾引号，必须加倍。
+fn quote_wt_arg(value: &str) -> String {
+    let mut out = value.replace('"', "'");
+    let trailing = out.chars().rev().take_while(|c| *c == '\\').count();
+    if trailing > 0 {
+        out.push_str(&"\\".repeat(trailing));
+    }
+    format!("\"{out}\"")
 }
 
 pub fn resolve_wt_with(
@@ -103,18 +128,11 @@ pub fn build_wt_commandline(project_name: &str, panes: &[PaneSpec]) -> String {
     let mut line = String::from("-w -1");
     for (i, p) in panes.iter().enumerate() {
         let title = if i == 0 { project_name } else { &p.title };
+        let dir = p.work_dir.display().to_string();
         if i == 0 {
-            line.push_str(&format!(
-                " nt -d \"{}\" --title \"{}\"",
-                p.work_dir.display(),
-                sanitize_title(title)
-            ));
+            line.push_str(&format!(" nt -d {} --title {}", quote_wt_arg(&dir), quote_wt_arg(title)));
         } else {
-            line.push_str(&format!(
-                " ; sp -V -d \"{}\" --title \"{}\"",
-                p.work_dir.display(),
-                sanitize_title(title)
-            ));
+            line.push_str(&format!(" ; sp -V -d {} --title {}", quote_wt_arg(&dir), quote_wt_arg(title)));
         }
         line.push_str(" --suppressApplicationTitle");
         match p.shell {
@@ -144,11 +162,15 @@ pub fn ps_launch_args(work_dir: &Path, command: &str) -> String {
 }
 
 pub fn validate_wt_commandline(line: &str) -> Result<(), String> {
-    if line.encode_utf16().count() > 30_000 {
+    if line.encode_utf16().count() > MAX_COMMANDLINE_UTF16 {
         Err("启动项命令总长度超过 30000 字符，请拆分启动项".into())
     } else {
         Ok(())
     }
+}
+
+fn commandline_utf16_len(program: &str, args: &str) -> usize {
+    program.encode_utf16().count() + 1 + args.encode_utf16().count()
 }
 
 pub fn plan_spawn(
@@ -166,9 +188,9 @@ pub fn plan_spawn(
             Ok(SpawnPlan::Wt { program: wt.to_path_buf(), args })
         }
         None => {
-            let launches = panes
-                .iter()
-                .map(|p| match p.shell {
+            let mut launches = Vec::with_capacity(panes.len());
+            for p in panes {
+                let launch = match p.shell {
                     Shell::Cmd => FallbackLaunch {
                         program: "cmd",
                         args: cmd_launch_args(&p.work_dir, &p.command),
@@ -179,8 +201,12 @@ pub fn plan_spawn(
                         args: ps_launch_args(&p.work_dir, &p.command),
                         work_dir: p.work_dir.clone(),
                     },
-                })
-                .collect();
+                };
+                if commandline_utf16_len(launch.program, &launch.args) > MAX_COMMANDLINE_UTF16 {
+                    return Err(format!("启动项「{}」命令过长，请拆分启动项", p.title));
+                }
+                launches.push(launch);
+            }
             Ok(SpawnPlan::Fallback { launches })
         }
     }
@@ -194,12 +220,20 @@ pub fn spawn_panes(project_name: &str, panes: &[PaneSpec]) -> std::io::Result<La
             Ok(LaunchMode::WindowsTerminal)
         }
         Ok(SpawnPlan::Fallback { launches }) => {
-            for launch in launches {
-                Command::new(launch.program)
+            for (i, launch) in launches.into_iter().enumerate() {
+                let spawned = Command::new(launch.program)
                     .raw_arg(launch.args)
                     .current_dir(launch.work_dir)
                     .creation_flags(CREATE_NEW_CONSOLE)
-                    .spawn()?;
+                    .spawn();
+                if let Err(e) = spawned {
+                    let msg = if i == 0 {
+                        e.to_string()
+                    } else {
+                        format!("已打开 {i} 个终端窗口后失败：{e}")
+                    };
+                    return Err(std::io::Error::new(e.kind(), msg));
+                }
             }
             Ok(LaunchMode::Fallback)
         }
@@ -232,18 +266,38 @@ mod tests {
     }
 
     #[test]
-    fn folds_cmd_lines_and_keeps_ps_multiline() {
-        assert_eq!(fold_cmd_lines("a\n  b \n\nc"), "a && b && c");
-        assert_eq!(fold_cmd_lines("\n \n"), "");
+    fn escape_echo_text_escapes_cmd_metachars() {
+        assert_eq!(escape_echo_text(r#"a & b | c < d > e ^ f"#), r#"a ^& b ^| c ^< d ^> e ^^ f"#);
+        assert_eq!(escape_echo_text("echo 中文"), "echo 中文");
     }
 
     #[test]
-    fn cmd_pane_command_cd_and_chain() {
+    fn cmd_pane_command_echoes_prompt_per_line() {
         assert_eq!(
             cmd_pane_command(Path::new(r"D:\My Proj\backend"), "conda activate x\npython -m uvicorn main:app"),
-            r#"cd /d "D:\My Proj\backend" && conda activate x && python -m uvicorn main:app"#
+            r#"cd /d "D:\My Proj\backend" && echo D:\My Proj\backend^>conda activate x && conda activate x && echo D:\My Proj\backend^>python -m uvicorn main:app && python -m uvicorn main:app"#
         );
+        assert_eq!(
+            cmd_pane_command(Path::new(r"D:\cxdownload\迅雷"), "dir\ndir"),
+            r#"cd /d "D:\cxdownload\迅雷" && echo D:\cxdownload\迅雷^>dir && dir && echo D:\cxdownload\迅雷^>dir && dir"#
+        );
+    }
+
+    #[test]
+    fn cmd_pane_command_skips_blank_lines_and_empty_command() {
         assert_eq!(cmd_pane_command(Path::new(r"D:\p"), "  "), r#"cd /d "D:\p""#);
+        assert_eq!(
+            cmd_pane_command(Path::new(r"D:\p"), "dir\n\n  \ncd x"),
+            r#"cd /d "D:\p" && echo D:\p^>dir && dir && echo D:\p^>cd x && cd x"#
+        );
+    }
+
+    #[test]
+    fn cmd_pane_prompt_for_drive_root() {
+        assert_eq!(
+            cmd_pane_command(Path::new(r"D:\"), "dir"),
+            r#"cd /d "D:\" && echo D:\^>dir && dir"#
+        );
     }
 
     #[test]
@@ -269,7 +323,7 @@ mod tests {
         assert_eq!(
             line,
             format!(
-                r#"-w -1 nt -d "D:\p\backend" --title "XingTu" --suppressApplicationTitle cmd /K "cd /d "D:\p\backend" && python app.py" ; sp -V -d "D:\p\frontend" --title "前端" --suppressApplicationTitle powershell -NoExit -ExecutionPolicy Bypass -EncodedCommand {}"#,
+                r#"-w -1 nt -d "D:\p\backend" --title "XingTu" --suppressApplicationTitle cmd /K "cd /d "D:\p\backend" && echo D:\p\backend^>python app.py && python app.py" ; sp -V -d "D:\p\frontend" --title "前端" --suppressApplicationTitle powershell -NoExit -ExecutionPolicy Bypass -EncodedCommand {}"#,
                 encode_ps_command(&ps_pane_script(Path::new(r"D:\p\frontend"), "npm run dev"))
             )
         );
@@ -298,16 +352,16 @@ mod tests {
         for (label, cmd) in cases {
             let cpane = pane("t", r"D:\p", Shell::Cmd, cmd);
             let line = build_wt_commandline("X", &[cpane]);
+            let expected_pane = format!(
+                r#"cd /d "D:\p" && echo {} && {cmd}"#,
+                escape_echo_text(&format!("D:\\p>{cmd}"))
+            );
             assert_eq!(
                 line,
-                format!(r#"-w -1 nt -d "D:\p" --title "X" --suppressApplicationTitle cmd /K "cd /d "D:\p" && {cmd}""#),
+                format!(r#"-w -1 nt -d "D:\p" --title "X" --suppressApplicationTitle cmd /K "{expected_pane}""#),
                 "wt cmd case {label}"
             );
-            assert_eq!(
-                cmd_pane_command(Path::new(r"D:\p"), cmd),
-                format!(r#"cd /d "D:\p" && {cmd}"#),
-                "cmd_pane case {label}"
-            );
+            assert_eq!(cmd_pane_command(Path::new(r"D:\p"), cmd), expected_pane, "cmd_pane case {label}");
 
             let ppane = pane("t", r"D:\p", Shell::PowerShell, cmd);
             let line = build_wt_commandline("X", &[ppane]);
@@ -333,13 +387,38 @@ mod tests {
         let cpane = pane("t", r"D:\My Proj", Shell::Cmd, "npm run dev");
         assert_eq!(
             build_wt_commandline("X", &[cpane]),
-            r#"-w -1 nt -d "D:\My Proj" --title "X" --suppressApplicationTitle cmd /K "cd /d "D:\My Proj" && npm run dev""#
+            r#"-w -1 nt -d "D:\My Proj" --title "X" --suppressApplicationTitle cmd /K "cd /d "D:\My Proj" && echo D:\My Proj^>npm run dev && npm run dev""#
         );
     }
 
     #[test]
+    fn wt_args_escape_trailing_backslash() {
+        let panes = vec![pane("t", r"D:\", Shell::Cmd, "echo hi")];
+        let line = build_wt_commandline("X\\", &panes);
+        assert!(line.contains(r#"-d "D:\\" --title "X\\""#), "{line}");
+    }
+
+    #[test]
+    fn wt_title_replaces_quotes_and_escapes_trailing_backslash() {
+        let panes = vec![pane("t", r"D:\p", Shell::Cmd, "echo hi")];
+        let line = build_wt_commandline("a\"b\\", &panes);
+        assert!(line.contains(r#"--title "a'b\\""#), "{line}");
+        assert!(!line.contains(r#"--title "a"b"#), "{line}");
+    }
+
+    #[test]
+    fn plan_spawn_fallback_rejects_overlong_commandline() {
+        let panes = vec![pane("t", r"D:\p", Shell::Cmd, &"a".repeat(40_000))];
+        let err = plan_spawn(None, "X", &panes).unwrap_err();
+        assert!(err.contains("过长") || err.contains("30000"), "{err}");
+    }
+
+    #[test]
     fn launch_args_for_fallback_windows() {
-        assert_eq!(cmd_launch_args(Path::new(r"D:\p"), "npm run dev"), r#"/K "cd /d "D:\p" && npm run dev""#);
+        assert_eq!(
+            cmd_launch_args(Path::new(r"D:\p"), "npm run dev"),
+            r#"/K "cd /d "D:\p" && echo D:\p^>npm run dev && npm run dev""#
+        );
         let args = ps_launch_args(Path::new(r"D:\p"), "npm run dev");
         let b64 = args
             .strip_prefix("-NoExit -ExecutionPolicy Bypass -EncodedCommand ")

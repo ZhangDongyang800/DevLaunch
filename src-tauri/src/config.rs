@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CONFIG_VERSION: u32 = 3;
@@ -16,6 +18,7 @@ pub enum Shell {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Item {
+    #[serde(default)]
     pub id: String,
     pub name: String,
     #[serde(default)]
@@ -55,27 +58,58 @@ impl Default for AppConfig {
     }
 }
 
+pub struct LoadedConfig {
+    pub config: AppConfig,
+    pub corrupt_backup: Option<PathBuf>,
+}
+
 impl AppConfig {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn load(path: &Path) -> AppConfig {
+        Self::load_diagnostic(path).config
+    }
+
+    pub fn load_diagnostic(path: &Path) -> LoadedConfig {
         match fs::read_to_string(path) {
             Ok(text) => match parse_config(&text) {
-                Ok(cfg) => cfg,
+                Ok(config) => LoadedConfig { config, corrupt_backup: None },
                 Err(e) => {
                     eprintln!("config parse failed: {e}; backing up and using defaults");
-                    let _ = backup_corrupt(path);
-                    AppConfig::new()
+                    let corrupt_backup = backup_corrupt(path).ok();
+                    LoadedConfig { config: AppConfig::new(), corrupt_backup }
                 }
             },
-            Err(_) => AppConfig::new(),
+            Err(_) => LoadedConfig { config: AppConfig::new(), corrupt_backup: None },
         }
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
         save_json(self, path)
+    }
+}
+
+/// 空 id / 重复 id 补发 UUID，保证 id 可作为稳定标识使用。
+pub fn normalize_item_ids(items: &mut [Item]) {
+    let mut seen = HashSet::new();
+    for item in items {
+        if item.id.trim().is_empty() || !seen.insert(item.id.clone()) {
+            item.id = uuid::Uuid::new_v4().to_string();
+            seen.insert(item.id.clone());
+        }
+    }
+}
+
+pub fn normalize_ids(cfg: &mut AppConfig) {
+    let mut project_seen = HashSet::new();
+    for project in &mut cfg.projects {
+        if project.id.trim().is_empty() || !project_seen.insert(project.id.clone()) {
+            project.id = uuid::Uuid::new_v4().to_string();
+            project_seen.insert(project.id.clone());
+        }
+        normalize_item_ids(&mut project.items);
     }
 }
 
@@ -89,10 +123,11 @@ pub fn save_json<T: Serialize>(value: &T, path: &Path) -> Result<(), String> {
     fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
-fn backup_corrupt(path: &Path) -> std::io::Result<()> {
+fn backup_corrupt(path: &Path) -> std::io::Result<PathBuf> {
     let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     let bak = path.with_extension(format!("json.corrupt-{ts}"));
-    fs::rename(path, bak)
+    fs::rename(path, &bak)?;
+    Ok(bak)
 }
 
 /// 版本探测后选择 v3 直接解析或 legacy 迁移（v1/v2）；无 version 但含 items 视为 v3。
@@ -113,18 +148,41 @@ fn probe_v3(value: &serde_json::Value) -> bool {
     }
 }
 
+fn has_key(value: &serde_json::Value, key: &str) -> bool {
+    matches!(value, serde_json::Value::Object(map) if map.contains_key(key))
+}
+
+fn reject_too_new(value: &serde_json::Value) -> Result<(), serde_json::Error> {
+    if let Some(v) = value.get("version").and_then(serde_json::Value::as_u64) {
+        if v > u64::from(CONFIG_VERSION) {
+            return Err(serde_json::Error::custom(format!(
+                "文件版本 v{v} 高于当前 DevLaunch 支持的 v{CONFIG_VERSION}，请升级应用后再导入"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub fn parse_config(text: &str) -> Result<AppConfig, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(text)?;
-    if probe_v3(&value) {
+    reject_too_new(&value)?;
+    if !has_key(&value, "projects") {
+        return Err(serde_json::Error::custom(
+            "这不是 DevLaunch 配置备份（缺少 projects 字段）；请选择通过「设置 → 导出」生成的配置文件",
+        ));
+    }
+    let mut cfg = if probe_v3(&value) {
         let mut cfg: AppConfig = serde_json::from_value(value)?;
         if cfg.version < CONFIG_VERSION {
             cfg.version = CONFIG_VERSION;
         }
-        Ok(cfg)
+        cfg
     } else {
         let legacy: LegacyAppConfig = serde_json::from_value(value)?;
-        Ok(legacy.into_v3())
-    }
+        legacy.into_v3()
+    };
+    normalize_ids(&mut cfg);
+    Ok(cfg)
 }
 
 #[derive(Deserialize)]
@@ -312,16 +370,24 @@ impl ProjectTemplate {
 
 pub fn parse_template(text: &str) -> Result<ProjectTemplate, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(text)?;
-    if probe_v3(&value) {
+    reject_too_new(&value)?;
+    if has_key(&value, "projects") || !(has_key(&value, "items") || has_key(&value, "groups")) {
+        return Err(serde_json::Error::custom(
+            "这不是项目配置文件（需要 items 或 groups 字段）；请选择「导出到项目根」生成的文件",
+        ));
+    }
+    let mut tpl = if probe_v3(&value) {
         let mut tpl: ProjectTemplate = serde_json::from_value(value)?;
         if tpl.version < CONFIG_VERSION {
             tpl.version = CONFIG_VERSION;
         }
-        Ok(tpl)
+        tpl
     } else {
         let legacy: LegacyTemplate = serde_json::from_value(value)?;
-        Ok(legacy.into_v3())
-    }
+        legacy.into_v3()
+    };
+    normalize_item_ids(&mut tpl.items);
+    Ok(tpl)
 }
 
 #[derive(Deserialize)]
@@ -561,5 +627,78 @@ mod tests {
             .filter_map(|e| e.ok())
             .any(|e| e.file_name().to_string_lossy().contains("config.json.corrupt-"));
         assert!(backed_up);
+    }
+
+    #[test]
+    fn readme_template_without_item_ids_parses_with_generated_ids() {
+        let json = r#"{"version":3,"name":"MyApp","items":[{"name":"Backend","workDir":"backend","shell":"cmd","command":"python app.py"},{"name":"Frontend","shell":"cmd","command":"npm run dev"}]}"#;
+        let tpl = parse_template(json).unwrap();
+        assert_eq!(tpl.items.len(), 2);
+        assert!(!tpl.items[0].id.trim().is_empty());
+        assert!(!tpl.items[1].id.trim().is_empty());
+        assert_ne!(tpl.items[0].id, tpl.items[1].id);
+    }
+
+    #[test]
+    fn config_with_missing_item_ids_parses_and_normalizes() {
+        let json = r#"{"version":3,"projects":[{"id":"p1","name":"X","rootDir":"D:\\p","items":[{"name":"a","shell":"cmd","command":"a"},{"name":"b","shell":"cmd","command":"b"}]}]}"#;
+        let cfg = parse_config(json).unwrap();
+        let items = &cfg.projects[0].items;
+        assert!(!items[0].id.trim().is_empty());
+        assert_ne!(items[0].id, items[1].id);
+    }
+
+    #[test]
+    fn duplicate_ids_are_replaced() {
+        let json = r#"{"version":3,"projects":[{"id":"p1","name":"X","rootDir":"D:\\p","items":[{"id":"same","name":"a","shell":"cmd","command":"a"},{"id":"same","name":"b","shell":"cmd","command":"b"}]},{"id":"p1","name":"Y","rootDir":"D:\\q","items":[]}]}"#;
+        let cfg = parse_config(json).unwrap();
+        assert_eq!(cfg.projects.len(), 2);
+        assert_ne!(cfg.projects[0].id, cfg.projects[1].id);
+        assert_ne!(cfg.projects[0].items[0].id, cfg.projects[0].items[1].id);
+    }
+
+    #[test]
+    fn legacy_template_rejected_as_config() {
+        let legacy_tpl = r#"{"version":2,"name":"PVDS","groups":[{"id":"g1","name":"默认","terminal":"cmd","steps":[{"id":"s1","terminal":"cmd","command":"a"}]}]}"#;
+        let err = parse_config(legacy_tpl).unwrap_err().to_string();
+        assert!(err.contains("projects"), "{err}");
+    }
+
+    #[test]
+    fn project_template_rejected_as_config() {
+        let tpl = r#"{"version":3,"name":"PVDS","items":[{"id":"i1","name":"a","shell":"cmd","command":"a"}]}"#;
+        let err = parse_config(tpl).unwrap_err().to_string();
+        assert!(err.contains("projects"), "{err}");
+    }
+
+    #[test]
+    fn config_rejected_as_template() {
+        let cfg = r#"{"version":3,"settings":{"autostart":false},"projects":[]}"#;
+        let err = parse_template(cfg).unwrap_err().to_string();
+        assert!(err.contains("items") || err.contains("groups"), "{err}");
+    }
+
+    #[test]
+    fn too_new_version_rejected_in_config_and_template() {
+        assert!(parse_config(r#"{"version":9,"projects":[]}"#).is_err());
+        assert!(parse_template(r#"{"version":9,"name":"X","items":[]}"#).is_err());
+    }
+
+    #[test]
+    fn load_diagnostic_reports_corrupt_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        fs::write(&path, "{ not valid json").unwrap();
+        let loaded = AppConfig::load_diagnostic(&path);
+        assert!(loaded.config.projects.is_empty());
+        let backup = loaded.corrupt_backup.expect("corrupt backup path");
+        assert!(backup.is_file());
+    }
+
+    #[test]
+    fn legacy_group_with_empty_id_gets_normalized() {
+        let v1 = r#"{"version":1,"projects":[{"id":"p1","name":"X","rootDir":"D:\\proj","groups":[{"terminal":"cmd","steps":[{"terminal":"cmd","command":"a"}]}]}]}"#;
+        let cfg = parse_config(v1).unwrap();
+        assert!(!cfg.projects[0].items[0].id.trim().is_empty());
     }
 }

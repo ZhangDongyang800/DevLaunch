@@ -16,9 +16,11 @@ dist-ssr
 # Local-only docs (product docs, design specs, plans)
 docs/
 
+# Local agent instructions
+AGENTS.md
+
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+.vscode/
 .idea
 .DS_Store
 *.suo

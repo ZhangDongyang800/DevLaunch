@@ -1,11 +1,17 @@
 use crate::config::{AppConfig, Item, Project};
 use crate::platform::{self, LaunchMode, PaneSpec};
 use std::path::{Path, PathBuf};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 pub fn notify(app: &AppHandle, body: String) {
     let _ = app.notification().builder().title("DevLaunch").body(&body).show();
+}
+
+fn main_window_visible(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
 }
 
 pub fn resolve_work_dir(root_dir: &str, work_dir: &Option<String>) -> PathBuf {
@@ -37,10 +43,21 @@ pub fn launch_items(app: &AppHandle, project: &Project, items: &[Item]) -> Resul
     let panes = build_panes(project, items).map_err(|e| { notify(app, e.clone()); e })?;
     let mode = platform::spawn_panes(&project.name, &panes)
         .map_err(|e| { let m = format!("启动失败：{e}"); notify(app, m.clone()); m })?;
-    if mode == LaunchMode::Fallback {
-        notify(app, "未检测到 Windows Terminal，已降级为独立终端窗口".into());
+    let hidden = !main_window_visible(app);
+    match (mode, hidden) {
+        (LaunchMode::Fallback, true) => notify(
+            app,
+            format!("未检测到 Windows Terminal，已用 {} 个独立终端窗口启动「{}」", panes.len(), project.name),
+        ),
+        (LaunchMode::Fallback, false) => notify(
+            app,
+            format!("未检测到 Windows Terminal，已降级为 {} 个独立终端窗口", panes.len()),
+        ),
+        (LaunchMode::WindowsTerminal, true) => {
+            notify(app, format!("已启动「{}」（{} 个窗格）", project.name, panes.len()));
+        }
+        (LaunchMode::WindowsTerminal, false) => {}
     }
-    notify(app, format!("已启动「{}」（{} 个窗格）", project.name, panes.len()));
     Ok(())
 }
 

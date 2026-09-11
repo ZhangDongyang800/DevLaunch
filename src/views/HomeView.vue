@@ -9,6 +9,8 @@ const emit = defineEmits<{ edit: [projectId: string]; notify: [msg: string, kind
 const projects = computed(() => config.value?.projects ?? [])
 
 const confirmDeleteId = ref('')
+const launchingId = ref('')
+const lastLaunchAt = new Map<string, number>()
 let confirmTimer: number | undefined
 
 function removeProject(id: string) {
@@ -33,11 +35,18 @@ function itemLabel(i: Item): string {
 }
 
 async function launch(id: string) {
+  if (launchingId.value) return
+  if (Date.now() - (lastLaunchAt.get(id) ?? 0) < 800) return
+  launchingId.value = id
   try {
+    await persist()
     await launchProject(id)
+    lastLaunchAt.set(id, Date.now())
     emit('notify', '已开始启动…')
   } catch (e) {
     emit('notify', `启动失败：${e}`, 'err')
+  } finally {
+    launchingId.value = ''
   }
 }
 
@@ -51,8 +60,10 @@ async function open(path: string) {
 
 function createProject() {
   if (!config.value) return
-  config.value.projects.push({ id: newId(), name: '新项目', rootDir: '', items: [] })
-  emit('edit', config.value.projects[config.value.projects.length - 1].id)
+  const p = { id: newId(), name: '新项目', rootDir: '', items: [] }
+  config.value.projects.push(p)
+  persist().catch((e) => emit('notify', `保存失败：${e}`, 'err'))
+  emit('edit', p.id)
 }
 </script>
 
@@ -81,9 +92,9 @@ function createProject() {
         tabindex="0"
         title="点击启动"
         @click="launch(p.id)"
-        @keydown.enter="launch(p.id)"
+        @keydown.enter.self="launch(p.id)"
       >
-        <button class="launch-btn" title="启动" @click.stop="launch(p.id)">▶</button>
+        <button class="launch-btn" title="启动" :disabled="launchingId === p.id" @click.stop="launch(p.id)">▶</button>
 
         <div class="pc-info">
           <div class="pc-head">

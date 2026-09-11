@@ -3,7 +3,7 @@ use crate::launcher;
 use crate::AppState;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 
 pub fn setup(app: &AppHandle) -> tauri::Result<TrayIcon> {
     let menu = build_menu(app)?;
@@ -26,11 +26,16 @@ pub fn setup(app: &AppHandle) -> tauri::Result<TrayIcon> {
         .build(app)
 }
 
+/// Windows 菜单把 & 当加速键，显示字面量需转义。
+pub fn menu_label(name: &str) -> String {
+    name.replace('&', "&&")
+}
+
 pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let cfg = app.state::<AppState>().config.lock().unwrap().clone();
     let menu = Menu::new(app)?;
     for p in &cfg.projects {
-        let sub = Submenu::with_id(app, format!("proj-{}", p.id), &p.name, true)?;
+        let sub = Submenu::with_id(app, format!("proj-{}", p.id), menu_label(&p.name), true)?;
         sub.append(&MenuItem::with_id(app, format!("launch:{}", p.id), "启动", true, None::<&str>)?)?;
         sub.append(&MenuItem::with_id(app, format!("open:{}", p.id), "打开目录", true, None::<&str>)?)?;
         menu.append(&sub)?;
@@ -51,7 +56,7 @@ pub fn rebuild(app: &AppHandle) {
     }
 }
 
-fn show_main_window(app: &AppHandle) {
+pub(crate) fn show_main_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
@@ -72,6 +77,8 @@ fn handle_menu(app: &AppHandle, id: String) {
             let cfg = app.state::<AppState>().config.lock().unwrap().clone();
             if let Err(e) = launcher::launch_project(&app, &cfg, &project_id) {
                 eprintln!("launch failed: {e}");
+                show_main_window(&app);
+                let _ = app.emit("launch-error", e);
             }
         });
     }
@@ -82,5 +89,16 @@ fn handle_menu(app: &AppHandle, id: String) {
         if let Some(p) = cfg.projects.iter().find(|p| p.id == project_id) {
             let _ = commands::open_dir(p.root_dir.clone());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_label_escapes_ampersand() {
+        assert_eq!(menu_label("A&B"), "A&&B");
+        assert_eq!(menu_label("plain"), "plain");
     }
 }

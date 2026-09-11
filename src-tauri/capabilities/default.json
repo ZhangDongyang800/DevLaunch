@@ -12,7 +12,6 @@
     "core:window:allow-maximize",
     "core:window:allow-unmaximize",
     "core:window:allow-toggle-maximize",
-    "dialog:default",
-    "opener:default"
+    "dialog:default"
   ]
 }

@@ -8,6 +8,7 @@ use config::AppConfig;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, WindowEvent};
+use tauri_plugin_autostart::ManagerExt;
 
 pub struct AppState {
     pub config: Mutex<AppConfig>,
@@ -17,6 +18,9 @@ pub struct AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            tray::show_main_window(app);
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
@@ -26,7 +30,17 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_data_dir().expect("failed to resolve app data dir");
             let path = dir.join("config.json");
-            let cfg = AppConfig::load(&path);
+            let loaded = AppConfig::load_diagnostic(&path);
+            let mut cfg = loaded.config;
+            if let Ok(enabled) = app.autolaunch().is_enabled() {
+                cfg.settings.autostart = enabled;
+            }
+            if let Some(backup) = &loaded.corrupt_backup {
+                launcher::notify(
+                    app.handle(),
+                    format!("配置文件损坏，已备份到 {}，并恢复默认配置", backup.display()),
+                );
+            }
             app.manage(AppState { config: Mutex::new(cfg), path });
             tray::setup(app.handle())?;
             #[cfg(debug_assertions)]
