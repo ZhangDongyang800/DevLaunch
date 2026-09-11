@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { config, persist } from '../store'
-import { exportProjectFile, launchItem, listSubdirs, readProjectTemplate } from '../api'
-import { newId, newItem, type Item } from '../types'
+import { detectProject, exportProjectFile, launchItem, listSubdirs, readProjectTemplate } from '../api'
+import { newId, newItem, type DetectResult, type Item } from '../types'
 
 const props = defineProps<{ projectId: string }>()
 const emit = defineEmits<{ back: []; notify: [msg: string, kind?: 'ok' | 'err'] }>()
@@ -104,6 +104,7 @@ async function browseRoot() {
   if (typeof picked !== 'string') return
   project.value.rootDir = picked
   await tryAutoImport()
+  if (project.value.items.length === 0) await runDetect(false)
 }
 
 function projectFilePath() {
@@ -125,6 +126,59 @@ async function tryAutoImport() {
   } catch {
     // 没有项目文件时静默
   }
+}
+
+const detectResult = ref<DetectResult | null>(null)
+const detectChecked = ref<boolean[]>([])
+const detecting = ref(false)
+
+const ecosystemLabels: Record<string, string> = { node: 'Node', rust: 'Rust', go: 'Go', python: 'Python' }
+
+const detectTitle = computed(() => {
+  if (!detectResult.value) return ''
+  const names = detectResult.value.ecosystems.map((e) => ecosystemLabels[e] ?? e)
+  return `检测到 ${names.join(' + ')} 项目，建议 ${detectResult.value.suggestions.length} 个启动项`
+})
+
+async function runDetect(notifyError: boolean) {
+  const root = project.value.rootDir.trim()
+  if (!root || detecting.value) return
+  detecting.value = true
+  try {
+    const res = await detectProject(root)
+    if (res.suggestions.length === 0) {
+      detectResult.value = null
+      if (notifyError) emit('notify', '未检测到可生成的启动项')
+    } else {
+      detectResult.value = res
+      detectChecked.value = res.suggestions.map(() => true)
+    }
+  } catch (e) {
+    detectResult.value = null
+    if (notifyError) emit('notify', `检测失败：${e}`, 'err')
+  } finally {
+    detecting.value = false
+  }
+}
+
+function applyDetection() {
+  if (!detectResult.value) return
+  const chosen = detectResult.value.suggestions.filter((_, i) => detectChecked.value[i])
+  for (const s of chosen) {
+    project.value.items.push({
+      id: newId(),
+      name: s.name,
+      workDir: s.workDir ?? '',
+      shell: s.shell,
+      command: s.command,
+    })
+  }
+  detectResult.value = null
+  emit('notify', `已添加 ${chosen.length} 个建议启动项`)
+}
+
+function ignoreDetection() {
+  detectResult.value = null
 }
 
 const confirmExport = ref(false)
@@ -196,6 +250,25 @@ async function doImport() {
       <span class="pb-label">ROOT</span>
       <input class="inline" v-model="project.rootDir" placeholder="D:\Projects\my-app" />
       <button class="ghost" @click="browseRoot">选择…</button>
+      <button class="ghost" :disabled="detecting" @click="runDetect(true)">
+        {{ detecting ? '检测中…' : '检测项目' }}
+      </button>
+    </div>
+
+    <div v-if="detectResult" class="detect-card">
+      <div class="dc-head">
+        <span class="dc-title">{{ detectTitle }}</span>
+        <span class="spacer" />
+        <button class="ghost" @click="ignoreDetection">忽略</button>
+      </div>
+      <label v-for="(s, si) in detectResult.suggestions" :key="si" class="dc-row">
+        <input type="checkbox" v-model="detectChecked[si]" />
+        <span class="dc-name">{{ s.name }}</span>
+        <span class="dc-wd mono">{{ s.workDir || '根目录' }}</span>
+        <span class="dc-cmd mono">{{ s.command }}</span>
+        <span class="dc-badge">{{ ecosystemLabels[s.ecosystem] ?? s.ecosystem }}</span>
+      </label>
+      <button class="primary" @click="applyDetection">添加选中项</button>
     </div>
 
     <div v-for="(it, ii) in project.items" :key="it.id" class="group">
