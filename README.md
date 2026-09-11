@@ -1,6 +1,6 @@
 # DevLaunch
 
-**A tray-resident launcher for your dev projects.**
+**A tray-resident launcher for your projects.**
 
 Save the steps you repeat every time you start a project:
 
@@ -20,7 +20,7 @@ Configure it once; from then on, just click a project to launch.
 
 ## Why I built DevLaunch
 
-While developing, you probably repeat these things every day:
+Before I start developing, these are the things I repeat every day:
 
 ```
 cd project
@@ -29,7 +29,7 @@ conda activate xxx
 python -m uvicorn main:app --reload
 ```
 
-Then you open another terminal:
+Then I open another terminal:
 
 ```
 cd frontend
@@ -38,7 +38,9 @@ npm run dev
 
 The more projects you have, the more tedious these repeated steps become.
 
-**DevLaunch does not change how you develop. It just records these manual steps and replays them with one click.**
+**I wanted something that does not change how you develop — it just records these tedious manual steps and replays them with one click.**
+
+Of course, it cannot fix bugs or other development problems for you. It only works well when your project itself is stable; it simply removes the tedious steps for situations where you test frequently.
 
 ## Features
 
@@ -73,29 +75,9 @@ npm install
 npm run tauri build   # artifacts: src-tauri/target/release/
 ```
 
-**Usage**:
-
-1. Open DevLaunch, create a project and pick its root directory
-2. Add startup items: name, working directory, command, terminal
-3. Click the project card to launch
-
-A startup item is just the command you would type by hand, e.g.:
-
-```jsonc
-{
-  "version": 3,
-  "name": "MyApp",
-  "items": [
-    { "name": "Backend", "workDir": "backend", "shell": "cmd",
-      "command": "conda activate app\npython -m uvicorn main:app --reload" },
-    { "name": "Frontend", "workDir": "frontend", "shell": "cmd", "command": "npm run dev" }
-  ]
-}
-```
-
 ### Share with your team
 
-Use **Export to project root** in the editor to generate `<project root>\devlaunch.json` (no machine-specific paths). Commit it; teammates who create a project pointing at that directory import it automatically.
+Use **Export to project root** in the editor to generate `<project root>\devlaunch.json`, then commit it to the repo. When a teammate opens DevLaunch and picks that directory, the startup config is imported automatically.
 
 ## Configuration
 

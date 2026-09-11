@@ -1,6 +1,6 @@
 # DevLaunch
 
-**一个托盘常驻的开发项目启动器。**
+**一个托盘常驻的项目启动器。**
 
 把你平时启动项目时重复执行的操作保存下来：
 
@@ -20,7 +20,7 @@
 
 ## 为什么我要做这个 DevLaunch？
 
-开发过程中，你可能每天都在重复这些事情：
+开发之前，我每天都在重复这些事情：
 
 ```
 cd project
@@ -38,7 +38,9 @@ npm run dev
 
 项目越多，这些重复操作越麻烦。
 
-**DevLaunch 不改变你的开发方式，只是把这些手动操作记下来，然后一键启动。**
+**我就想能不能做一个东西它不改变你的开发方式，只是把这些繁琐的手动操作记下来，然后一键启动。**
+
+当然它并不能帮你解决开发上的报错或者其他难题，它能很好的运行也是建立在你项目稳定的基础上的，它只是简化了繁琐的步骤，针对频繁测试的情况下。
 
 ## 特性
 
@@ -73,29 +75,9 @@ npm install
 npm run tauri build   # 产物：src-tauri/target/release/
 ```
 
-**使用**：
-
-1. 打开 DevLaunch，新建项目并选择项目根目录
-2. 添加启动项：名称、工作目录、命令、终端
-3. 点击项目卡片启动
-
-一个启动项就是一段平时手敲的命令，例如：
-
-```jsonc
-{
-  "version": 3,
-  "name": "MyApp",
-  "items": [
-    { "name": "后端", "workDir": "backend", "shell": "cmd",
-      "command": "conda activate app\npython -m uvicorn main:app --reload" },
-    { "name": "前端", "workDir": "frontend", "shell": "cmd", "command": "npm run dev" }
-  ]
-}
-```
-
 ### 团队共享
 
-编辑器「导出到项目根」生成 `<项目根>\devlaunch.json`（不含本机路径），提交进仓库；队友新建项目选择该目录时会自动导入。
+编辑器「导出到项目根」生成 `<项目根>\devlaunch.json`，提交进仓库；队友打开DevLaunch，选择该目录时会自动导入启动配置。
 
 ## 配置方式
 
