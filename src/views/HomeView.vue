@@ -4,7 +4,7 @@ import { config, persist } from '../store'
 import { newId, type Item } from '../types'
 import { launchProject, openDir } from '../api'
 
-const emit = defineEmits<{ edit: [projectId: string]; notify: [msg: string, kind?: 'ok' | 'err'] }>()
+const emit = defineEmits<{ edit: [projectId: string]; scan: []; notify: [msg: string, kind?: 'ok' | 'err'] }>()
 
 const projects = computed(() => config.value?.projects ?? [])
 
@@ -73,6 +73,7 @@ function createProject() {
       <h1>启动台</h1>
       <span class="row">
         <span class="home-count mono">{{ projects.length }} PROJECTS</span>
+        <button class="bordered" @click="emit('scan')">扫描工作区</button>
         <button class="bordered" @click="createProject">+ 新建项目</button>
       </span>
     </div>
@@ -81,6 +82,7 @@ function createProject() {
       <div class="empty-title">还没有项目</div>
       <div class="empty-sub">配置一次项目路径和命令，以后一键启动全部终端</div>
       <button class="primary" @click="createProject">+ 新建项目</button>
+      <button class="bordered" @click="emit('scan')">扫描工作区</button>
     </div>
 
     <div v-else class="list">

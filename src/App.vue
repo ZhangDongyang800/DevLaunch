@@ -5,6 +5,7 @@ import { load, config } from './store'
 import type { View, ToastKind } from './types'
 import TitleBar from './components/TitleBar.vue'
 import HomeView from './views/HomeView.vue'
+import ScanView from './views/ScanView.vue'
 import EditorView from './views/EditorView.vue'
 import SettingsView from './views/SettingsView.vue'
 
@@ -50,7 +51,8 @@ onUnmounted(() => unlisten?.())
       </button>
     </TitleBar>
     <main class="main">
-      <HomeView v-if="view.name === 'home'" @edit="view = { name: 'editor', projectId: $event }" @notify="showToast" />
+      <HomeView v-if="view.name === 'home'" @edit="view = { name: 'editor', projectId: $event }" @scan="view = { name: 'scan' }" @notify="showToast" />
+      <ScanView v-else-if="view.name === 'scan'" @back="view = { name: 'home' }" @notify="showToast" />
       <EditorView v-else-if="view.name === 'editor'" :project-id="view.projectId" @back="view = { name: 'home' }" @notify="showToast" />
       <SettingsView v-else @notify="showToast" />
     </main>

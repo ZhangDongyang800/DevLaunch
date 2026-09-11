@@ -724,3 +724,76 @@ h1 {
 
   .main { padding: 14px 14px 24px; }
 }
+
+.spacer { flex: 1; }
+
+/* ---------- detect card ---------- */
+
+.detect-card {
+  border: 1px solid var(--border-strong);
+  background: var(--elevated);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 10px 0 14px;
+}
+
+.dc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.dc-title { font-size: 12.5px; color: var(--text); }
+.dc-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; cursor: pointer; }
+.dc-name { min-width: 90px; }
+.dc-wd { color: var(--muted); font-size: 12px; min-width: 70px; }
+.dc-cmd {
+  flex: 1;
+  color: var(--text);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-badge,
+.scan-badge {
+  font-size: 10.5px;
+  color: var(--signal);
+  border: 1px solid var(--signal-border);
+  background: var(--signal-dim);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.detect-card .primary { margin-top: 8px; }
+
+/* ---------- scan view ---------- */
+
+.scan-title { font-size: 14px; font-weight: 600; }
+.scan-list { margin-top: 8px; border: 1px solid var(--border); border-radius: var(--radius); }
+.scan-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.scan-check { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.scan-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.scan-row:last-child { border-bottom: none; }
+.scan-row.disabled { opacity: 0.45; }
+.scan-info { flex: 1; min-width: 0; }
+.scan-name { font-size: 12.5px; }
+.scan-tag {
+  margin-left: 4px;
+  font-size: 10.5px;
+  color: var(--muted);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+}
+.scan-path { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.scan-eco { display: flex; gap: 4px; }
+.scan-badge.dim { color: var(--faint); border-color: var(--border-strong); background: transparent; }
+.scan-count { color: var(--faint); font-size: 11.5px; }
