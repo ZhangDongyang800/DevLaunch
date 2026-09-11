@@ -1,6 +1,14 @@
 # DevLaunch
 
-**Windows 托盘常驻的开发项目一键启动器**——一次配置，一键重放平时手动敲的终端启动命令。
+**一个托盘常驻的开发项目启动器。**
+
+把你平时启动项目时重复执行的操作保存下来：
+
+```
+打开终端 → 进入项目目录 → 激活环境 → 执行命令
+```
+
+配置一次，以后只需点击项目即可启动。
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -10,17 +18,50 @@
 ![Rust](https://img.shields.io/badge/Rust-stable-000000)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-DevLaunch 记住你启动项目时手动做的事：打开终端、`cd` 进目录、激活环境、执行命令。配置一次，之后点击项目卡片，即可在一个 Windows Terminal 窗口中为每个启动项开一个窗格并并行执行。
+## 为什么我要做这个 DevLaunch？
 
-> 它是一键重放器，不是终端编排器：不等待、不轮询、不监控，命令失败与服务崩溃都留在真实终端里。
+开发过程中，你可能每天都在重复这些事情：
+
+```
+cd project
+cd backend
+conda activate xxx
+python -m uvicorn main:app --reload
+```
+
+然后再打开另一个终端：
+
+```
+cd frontend
+npm run dev
+```
+
+项目越多，这些重复操作越麻烦。
+
+**DevLaunch 不改变你的开发方式，只是把这些手动操作记下来，然后一键启动。**
 
 ## 特性
 
-- **一键启动**：一个项目 = 一个窗口，每个启动项一个窗格，并行执行
-- **真实可交互终端**：多行命令在同一 shell 会话内顺序执行（激活环境 → 启动服务），`Ctrl+C` 与手敲一致
-- **开箱可用**：优先 Windows Terminal，未安装时自动降级为多个独立终端窗口
-- **配置随仓库走**：导出 `devlaunch.json` 到项目根，队友导入即可运行
-- **兼容旧配置**：v1 / v2 配置与模板自动迁移
+- **一键启动**：
+
+  点击项目后，DevLaunch 自动打开终端、进入对应目录并执行配置好的命令。
+
+  无需再手动寻找项目目录和输入启动命令。
+
+- **配置随仓库走**：
+
+  可以将项目启动配置导出为：
+
+  ```
+  devlaunch.json
+  ```
+
+  放在项目根目录并提交到 Git。
+
+  队友拉取项目后，DevLaunch 可以直接识别配置，无需重新配置启动项。
+
+  **项目怎么启动，也可以成为项目的一部分。**
+
 - **托盘常驻**：右键菜单按项目启动，支持开机自启
 
 ## 快速开始
@@ -34,8 +75,8 @@ npm run tauri build   # 产物：src-tauri/target/release/
 
 **使用**：
 
-1. 打开 DevLaunch（常驻托盘），新建项目并选择项目根目录
-2. 添加启动项：名称、工作目录、命令（支持多行）、命令方言（cmd / PowerShell）
+1. 打开 DevLaunch，新建项目并选择项目根目录
+2. 添加启动项：名称、工作目录、命令、终端
 3. 点击项目卡片启动
 
 一个启动项就是一段平时手敲的命令，例如：
@@ -54,14 +95,38 @@ npm run tauri build   # 产物：src-tauri/target/release/
 
 ### 团队共享
 
-编辑器「导出到项目根」生成 `<项目根>\devlaunch.json`（不含本机路径），提交进仓库；队友新建项目选择该目录时会自动导入。请使用相对 `workDir`（如 `backend`）。
+编辑器「导出到项目根」生成 `<项目根>\devlaunch.json`（不含本机路径），提交进仓库；队友新建项目选择该目录时会自动导入。
+
+## 配置方式
+
+每个启动项包含：
+
+| 配置     | 说明                   |
+| -------- | ---------------------- |
+| 名称     | 启动项名称             |
+| 工作目录 | 命令执行的位置         |
+| Shell    | `cmd` / PowerShell     |
+| 命令     | 要执行的命令，支持多行 |
+
+例如：
+
+```
+名称：后端
+
+工作目录：backend
+
+Shell：cmd
+
+命令：
+conda activate app
+python -m uvicorn main:app --reload
+```
 
 ## 开发
 
 ```bash
 npm run tauri dev     # 调试运行
 npm run build         # 前端类型检查 + 构建
-cargo test            # Rust 单测（在 src-tauri/ 下，61 个）
 ```
 
 要求：Windows 10 / 11、Node.js 20.19+ 或 22.12+、Rust（stable，MSVC 工具链）。
