@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { AppConfig, ProjectTemplate } from './types'
+import type { AppConfig, DetectResult, DetectedProject, ProjectTemplate } from './types'
 
 export const getConfig = () => invoke<AppConfig>('get_config')
 export const saveConfig = (config: AppConfig) => invoke<void>('save_config', { config })
@@ -18,3 +18,6 @@ export const readProjectTemplate = (path: string) =>
   invoke<ProjectTemplate>('read_project_template', { path })
 export const getAutostart = () => invoke<boolean>('get_autostart')
 export const setAutostart = (enabled: boolean) => invoke<void>('set_autostart', { enabled })
+
+export const detectProject = (path: string) => invoke<DetectResult>('detect_project', { path })
+export const scanWorkspace = (path: string) => invoke<DetectedProject[]>('scan_workspace', { path })

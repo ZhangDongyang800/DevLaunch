@@ -1,4 +1,8 @@
-export type View = { name: 'home' } | { name: 'editor'; projectId: string } | { name: 'settings' }
+export type View =
+  | { name: 'home' }
+  | { name: 'editor'; projectId: string }
+  | { name: 'scan' }
+  | { name: 'settings' }
 
 export type Shell = 'cmd' | 'powershell'
 
@@ -31,6 +35,27 @@ export interface ProjectTemplate {
   version: number
   name: string
   items: Item[]
+}
+
+export interface Suggestion {
+  name: string
+  workDir?: string | null
+  shell: Shell
+  command: string
+  ecosystem: string
+}
+
+export interface DetectResult {
+  ecosystems: string[]
+  suggestions: Suggestion[]
+}
+
+export interface DetectedProject {
+  name: string
+  rootDir: string
+  alreadyImported: boolean
+  ecosystems: string[]
+  suggestions: Suggestion[]
 }
 
 export type ToastKind = 'ok' | 'err'
