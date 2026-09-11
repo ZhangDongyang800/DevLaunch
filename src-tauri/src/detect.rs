@@ -50,6 +50,13 @@ fn collect_dir(dir: &Path, subdir: Option<&str>, out: &mut Vec<Suggestion>) {
     if dir.join("package.json").is_file() {
         out.extend(node_suggestions(dir, subdir));
     }
+    if dir.join("Cargo.toml").is_file() {
+        out.extend(rust_suggestions(dir, subdir));
+    }
+    if dir.join("go.mod").is_file() {
+        out.extend(go_suggestions(dir, subdir));
+    }
+    out.extend(python_suggestions(dir, subdir));
 }
 
 fn visible_subdirs(root: &Path) -> Vec<String> {
@@ -120,6 +127,140 @@ fn package_manager(dir: &Path) -> &'static str {
         "bun"
     } else {
         "npm"
+    }
+}
+
+fn item_name(subdir: Option<&str>, fallback: &str) -> String {
+    match subdir {
+        Some(d) => d.to_string(),
+        None => fallback.to_string(),
+    }
+}
+
+fn rust_suggestions(dir: &Path, subdir: Option<&str>) -> Vec<Suggestion> {
+    let Some(text) = read_text(&dir.join("Cargo.toml")) else { return Vec::new() };
+    if !text.lines().any(|l| l.trim() == "[package]") {
+        return Vec::new();
+    }
+    vec![Suggestion {
+        name: item_name(subdir, "run"),
+        work_dir: subdir.map(str::to_string),
+        shell: Shell::Cmd,
+        command: "cargo run".to_string(),
+        ecosystem: "rust".to_string(),
+    }]
+}
+
+fn go_suggestions(dir: &Path, subdir: Option<&str>) -> Vec<Suggestion> {
+    let command = if dir.join("main.go").is_file() {
+        "go run .".to_string()
+    } else {
+        let mut names: Vec<String> = Vec::new();
+        if let Ok(entries) = fs::read_dir(dir.join("cmd")) {
+            for entry in entries.flatten() {
+                if entry.path().join("main.go").is_file() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+        names.sort();
+        let Some(first) = names.into_iter().next() else { return Vec::new() };
+        format!("go run ./cmd/{first}")
+    };
+    vec![Suggestion {
+        name: item_name(subdir, "run"),
+        work_dir: subdir.map(str::to_string),
+        shell: Shell::Cmd,
+        command,
+        ecosystem: "go".to_string(),
+    }]
+}
+
+fn python_suggestions(dir: &Path, subdir: Option<&str>) -> Vec<Suggestion> {
+    let candidates = [
+        ("manage.py", "python manage.py runserver", "manage"),
+        ("main.py", "python main.py", "main"),
+        ("app.py", "python app.py", "app"),
+    ];
+    for (file, command, stem) in candidates {
+        if dir.join(file).is_file() {
+            return vec![Suggestion {
+                name: item_name(subdir, stem),
+                work_dir: subdir.map(str::to_string),
+                shell: Shell::Cmd,
+                command: command.to_string(),
+                ecosystem: "python".to_string(),
+            }];
+        }
+    }
+    Vec::new()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScannedRepo {
+    pub name: String,
+    pub root_dir: String,
+    pub ecosystems: Vec<String>,
+    pub suggestions: Vec<Suggestion>,
+}
+
+pub fn is_git_repo(dir: &Path) -> bool {
+    dir.join(".git").exists()
+}
+
+pub fn scan(root: &Path) -> Vec<ScannedRepo> {
+    let mut repos = collect_scan(root);
+    repos.sort_by_key(|r| r.root_dir.to_ascii_lowercase());
+    repos
+}
+
+fn collect_scan(root: &Path) -> Vec<ScannedRepo> {
+    if is_git_repo(root) {
+        return vec![scanned_repo(root)];
+    }
+    let mut repos: Vec<ScannedRepo> = Vec::new();
+    let mut visited = 0usize;
+    let mut level1: Vec<std::path::PathBuf> = Vec::new();
+    for name in visible_subdirs(root) {
+        visited += 1;
+        if visited > MAX_VISITED_DIRS || repos.len() >= MAX_SCAN_RESULTS {
+            return repos;
+        }
+        let p = root.join(&name);
+        if is_git_repo(&p) {
+            repos.push(scanned_repo(&p));
+        } else {
+            level1.push(p);
+        }
+    }
+    for parent in level1 {
+        for name in visible_subdirs(&parent) {
+            visited += 1;
+            if visited > MAX_VISITED_DIRS || repos.len() >= MAX_SCAN_RESULTS {
+                return repos;
+            }
+            let p = parent.join(&name);
+            if is_git_repo(&p) {
+                repos.push(scanned_repo(&p));
+            }
+        }
+    }
+    repos
+}
+
+fn scanned_repo(dir: &Path) -> ScannedRepo {
+    let name = dir
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let res = detect(dir);
+    ScannedRepo {
+        name,
+        root_dir: dir.to_string_lossy().to_string(),
+        ecosystems: res.ecosystems,
+        suggestions: res.suggestions,
     }
 }
 
@@ -235,5 +376,120 @@ mod tests {
             write_file(dir.path(), &format!("{name}/package.json"), r#"{"scripts":{"dev":"x","start":"x"}}"#);
         }
         assert_eq!(detect(dir.path()).suggestions.len(), 8);
+    }
+
+    #[test]
+    fn rust_package_suggests_cargo_run() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "Cargo.toml", "[package]\nname = \"app\"\n");
+        let res = detect(dir.path());
+        assert_eq!(res.suggestions[0].command, "cargo run");
+        assert_eq!(res.suggestions[0].name, "run");
+        assert_eq!(res.ecosystems, vec!["rust"]);
+    }
+
+    #[test]
+    fn rust_workspace_only_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "Cargo.toml", "[workspace]\nmembers = [\"a\"]\n");
+        assert!(detect(dir.path()).suggestions.is_empty());
+    }
+
+    #[test]
+    fn go_root_main_and_cmd_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "go.mod", "module app\n");
+        write_file(dir.path(), "main.go", "package main\n");
+        assert_eq!(detect(dir.path()).suggestions[0].command, "go run .");
+
+        let dir2 = tempfile::tempdir().unwrap();
+        write_file(dir2.path(), "go.mod", "module app\n");
+        write_file(dir2.path(), "cmd/api/main.go", "package main\n");
+        assert_eq!(detect(dir2.path()).suggestions[0].command, "go run ./cmd/api");
+    }
+
+    #[test]
+    fn go_without_entry_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "go.mod", "module app\n");
+        assert!(detect(dir.path()).suggestions.is_empty());
+    }
+
+    #[test]
+    fn python_entry_priority() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "app.py", "");
+        write_file(dir.path(), "main.py", "");
+        write_file(dir.path(), "manage.py", "");
+        let res = detect(dir.path());
+        assert_eq!(res.suggestions[0].command, "python manage.py runserver");
+        assert_eq!(res.suggestions[0].name, "manage");
+    }
+
+    #[test]
+    fn python_without_entry_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "requirements.txt", "fastapi\n");
+        write_file(dir.path(), "pyproject.toml", "[project]\nname = \"app\"\n");
+        assert!(detect(dir.path()).suggestions.is_empty());
+    }
+
+    #[test]
+    fn is_git_repo_accepts_dir_or_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        fs::create_dir_all(a.join(".git")).unwrap();
+        assert!(is_git_repo(&a));
+        let b = dir.path().join("b");
+        fs::create_dir_all(&b).unwrap();
+        fs::write(b.join(".git"), "gitdir: ../x").unwrap();
+        assert!(is_git_repo(&b));
+        assert!(!is_git_repo(dir.path()));
+    }
+
+    #[test]
+    fn scan_finds_repos_at_depth_one_and_two() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("repoA/.git")).unwrap();
+        fs::create_dir_all(dir.path().join("org/repoB/.git")).unwrap();
+        fs::create_dir_all(dir.path().join("org/notrepo")).unwrap();
+        let repos = scan(dir.path());
+        let names: Vec<&str> = repos.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["repoB", "repoA"]);
+    }
+
+    #[test]
+    fn scan_skips_hidden_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".hidden/repo/.git")).unwrap();
+        assert!(scan(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn scan_root_is_repo_returns_self() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".git")).unwrap();
+        let repos = scan(dir.path());
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].root_dir, dir.path().to_string_lossy());
+    }
+
+    #[test]
+    fn scan_caps_results_at_200() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..201 {
+            fs::create_dir_all(dir.path().join(format!("repo{i:03}")).join(".git")).unwrap();
+        }
+        assert_eq!(scan(dir.path()).len(), MAX_SCAN_RESULTS);
+    }
+
+    #[test]
+    fn scan_repos_include_detected_suggestions() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("web/.git")).unwrap();
+        write_file(dir.path(), "web/package.json", r#"{"scripts":{"dev":"vite"}}"#);
+        let repos = scan(dir.path());
+        assert_eq!(repos[0].suggestions[0].command, "npm run dev");
+        assert_eq!(repos[0].ecosystems, vec!["node"]);
     }
 }
