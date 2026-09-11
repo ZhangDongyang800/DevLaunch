@@ -1,7 +1,9 @@
 use crate::config::{AppConfig, ProjectTemplate};
+use crate::detect;
 use crate::launcher;
 use crate::tray;
 use crate::AppState;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -145,6 +147,51 @@ mod tests {
         let path = Path::new(&cfg.projects[0].root_dir).join("devlaunch.json");
         export_project_to(&cfg, "p1", &path).unwrap();
         assert!(path.is_file());
+    }
+
+    #[test]
+    fn detect_dir_errors_on_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope-xyz");
+        assert!(detect_dir(missing.to_str().unwrap()).unwrap_err().contains("目录不存在"));
+    }
+
+    #[test]
+    fn detect_dir_returns_node_suggestions() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"scripts":{"dev":"vite"}}"#).unwrap();
+        let res = detect_dir(dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(res.suggestions[0].command, "npm run dev");
+    }
+
+    #[test]
+    fn normalize_for_compare_normalizes_windows_paths() {
+        assert_eq!(normalize_for_compare("D:/Projects/App/"), "d:\\projects\\app");
+        assert_eq!(normalize_for_compare("D:\\Projects\\App"), "d:\\projects\\app");
+    }
+
+    #[test]
+    fn scan_with_config_marks_already_imported() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("app/.git")).unwrap();
+        let mut cfg = AppConfig::default();
+        cfg.projects.push(Project {
+            id: "p1".into(),
+            name: "App".into(),
+            root_dir: dir.path().join("app").to_string_lossy().to_uppercase(),
+            items: vec![],
+        });
+        let got = scan_with_config(dir.path().to_str().unwrap(), &cfg).unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].already_imported);
+    }
+
+    #[test]
+    fn scan_with_config_errors_on_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope-xyz");
+        let cfg = AppConfig::default();
+        assert!(scan_with_config(missing.to_str().unwrap(), &cfg).unwrap_err().contains("目录不存在"));
     }
 }
 
@@ -304,6 +351,66 @@ pub fn subdirs(path: &str) -> Result<Vec<String>, String> {
 #[tauri::command]
 pub fn list_subdirs(path: String) -> Result<Vec<String>, String> {
     subdirs(&path)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedProject {
+    pub name: String,
+    pub root_dir: String,
+    pub already_imported: bool,
+    pub ecosystems: Vec<String>,
+    pub suggestions: Vec<detect::Suggestion>,
+}
+
+#[tauri::command]
+pub fn detect_project(path: String) -> Result<detect::DetectResult, String> {
+    detect_dir(&path)
+}
+
+pub fn detect_dir(path: &str) -> Result<detect::DetectResult, String> {
+    let p = Path::new(path);
+    if !p.is_dir() {
+        return Err(format!("目录不存在：{path}"));
+    }
+    Ok(detect::detect(p))
+}
+
+#[tauri::command]
+pub fn scan_workspace(state: State<AppState>, path: String) -> Result<Vec<DetectedProject>, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    scan_with_config(&path, &cfg)
+}
+
+pub fn scan_with_config(path: &str, cfg: &AppConfig) -> Result<Vec<DetectedProject>, String> {
+    let p = Path::new(path);
+    if !p.is_dir() {
+        return Err(format!("目录不存在：{path}"));
+    }
+    let existing: Vec<String> = cfg
+        .projects
+        .iter()
+        .map(|project| normalize_for_compare(&project.root_dir))
+        .collect();
+    Ok(detect::scan(p)
+        .into_iter()
+        .map(|repo| DetectedProject {
+            already_imported: existing
+                .iter()
+                .any(|e| e == &normalize_for_compare(&repo.root_dir)),
+            name: repo.name,
+            root_dir: repo.root_dir,
+            ecosystems: repo.ecosystems,
+            suggestions: repo.suggestions,
+        })
+        .collect())
+}
+
+/// Windows 路径比较归一化：统一分隔符、去尾分隔符、不区分大小写。
+pub fn normalize_for_compare(path: &str) -> String {
+    path.trim_end_matches(|c| c == '\\' || c == '/')
+        .replace('/', "\\")
+        .to_ascii_lowercase()
 }
 
 #[tauri::command]
