@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod config;
+pub mod detect;
 pub mod launcher;
 pub mod platform;
 pub mod tray;
