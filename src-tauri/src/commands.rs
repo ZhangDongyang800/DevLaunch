@@ -363,7 +363,7 @@ pub struct DetectedProject {
     pub suggestions: Vec<detect::Suggestion>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn detect_project(path: String) -> Result<detect::DetectResult, String> {
     detect_dir(&path)
 }
@@ -376,8 +376,8 @@ pub fn detect_dir(path: &str) -> Result<detect::DetectResult, String> {
     Ok(detect::detect(p))
 }
 
-#[tauri::command]
-pub fn scan_workspace(state: State<AppState>, path: String) -> Result<Vec<DetectedProject>, String> {
+#[tauri::command(async)]
+pub fn scan_workspace(state: State<'_, AppState>, path: String) -> Result<Vec<DetectedProject>, String> {
     let cfg = state.config.lock().unwrap().clone();
     scan_with_config(&path, &cfg)
 }

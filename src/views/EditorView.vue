@@ -131,6 +131,9 @@ async function tryAutoImport() {
 const detectResult = ref<DetectResult | null>(null)
 const detectChecked = ref<boolean[]>([])
 const detecting = ref(false)
+watch(() => project.value?.rootDir, () => {
+  detectResult.value = null
+})
 
 const ecosystemLabels: Record<string, string> = { node: 'Node', rust: 'Rust', go: 'Go', python: 'Python' }
 
