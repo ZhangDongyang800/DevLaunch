@@ -145,6 +145,7 @@ pub fn build_wt_commandline(project_name: &str, panes: &[PaneSpec]) -> String {
                 line.push_str(" powershell -NoExit -ExecutionPolicy Bypass -EncodedCommand ");
                 line.push_str(&encode_ps_command(&ps_pane_script(&p.work_dir, &p.command)));
             }
+            Shell::Bash => unreachable!("bash panes are rejected in plan_spawn"),
         }
     }
     line
@@ -181,6 +182,12 @@ pub fn plan_spawn(
     if panes.is_empty() {
         return Err("没有可启动的启动项".into());
     }
+    if let Some(p) = panes.iter().find(|p| p.shell == Shell::Bash) {
+        return Err(format!(
+            "启动项「{}」暂不支持 Git Bash（等待后续版本接线）",
+            p.title
+        ));
+    }
     match resolved_wt {
         Some(wt) => {
             let args = build_wt_commandline(project_name, panes);
@@ -201,6 +208,7 @@ pub fn plan_spawn(
                         args: ps_launch_args(&p.work_dir, &p.command),
                         work_dir: p.work_dir.clone(),
                     },
+                    Shell::Bash => unreachable!("bash panes are rejected in plan_spawn"),
                 };
                 if commandline_utf16_len(launch.program, &launch.args) > MAX_COMMANDLINE_UTF16 {
                     return Err(format!("启动项「{}」命令过长，请拆分启动项", p.title));

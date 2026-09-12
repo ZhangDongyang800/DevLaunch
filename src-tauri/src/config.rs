@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const CONFIG_VERSION: u32 = 4;
+pub const CONFIG_VERSION: u32 = 5;
 pub const MODERN_VERSION: u32 = 3;
 pub const TEMPLATE_VERSION: u32 = 3;
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+D";
@@ -20,6 +20,7 @@ pub enum Shell {
     #[default]
     Cmd,
     PowerShell,
+    Bash,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -332,6 +333,7 @@ fn cd_line(shell: Shell, dir: &str) -> String {
     match shell {
         Shell::Cmd => format!("cd /d \"{dir}\""),
         Shell::PowerShell => format!("Set-Location -LiteralPath '{}'", dir.replace('\'', "''")),
+        Shell::Bash => format!("cd '{}'", dir.replace('\\', "/").replace('\'', "'\\''")),
     }
 }
 
@@ -501,10 +503,28 @@ mod tests {
 
     #[test]
     fn too_new_rejected_per_file_type() {
-        assert!(parse_config(r#"{"version":5,"projects":[]}"#).is_err());
-        assert!(parse_config(r#"{"version":4,"projects":[]}"#).is_ok());
+        assert!(parse_config(r#"{"version":6,"projects":[]}"#).is_err());
+        assert!(parse_config(r#"{"version":5,"projects":[]}"#).is_ok());
         assert!(parse_template(r#"{"version":4,"name":"X","items":[]}"#).is_err());
         assert!(parse_template(r#"{"version":3,"name":"X","items":[]}"#).is_ok());
+    }
+
+    #[test]
+    fn shell_serializes_bash() {
+        assert_eq!(serde_json::to_string(&Shell::Bash).unwrap(), "\"bash\"");
+    }
+
+    #[test]
+    fn v4_config_migrates_to_v5_preserving_items() {
+        let v4 = r#"{"version":4,"settings":{"autostart":false,"hotkey":"Ctrl+Alt+D"},
+            "projects":[{"id":"p1","name":"X","rootDir":"D:\\p","favorite":true,"lastLaunchedAt":123,
+            "items":[{"id":"i1","name":"bash项","shell":"bash","command":"npm run dev"}]}]}"#;
+        let cfg = parse_config(v4).unwrap();
+        assert_eq!(cfg.version, CONFIG_VERSION);
+        assert_eq!(CONFIG_VERSION, 5);
+        assert!(cfg.projects[0].favorite);
+        assert_eq!(cfg.projects[0].items[0].shell, Shell::Bash);
+        assert_eq!(cfg.projects[0].items[0].command, "npm run dev");
     }
 
     #[test]
