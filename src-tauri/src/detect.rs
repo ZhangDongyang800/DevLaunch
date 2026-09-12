@@ -492,4 +492,19 @@ mod tests {
         assert_eq!(repos[0].suggestions[0].command, "npm run dev");
         assert_eq!(repos[0].ecosystems, vec!["node"]);
     }
+
+    #[test]
+    fn package_json_over_one_megabyte_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let pad = "x".repeat(1_100_000);
+        write_file(dir.path(), "package.json", &format!(r#"{{"scripts":{{"dev":"vite"}},"pad":"{pad}"}}"#));
+        assert!(detect(dir.path()).suggestions.is_empty());
+    }
+
+    #[test]
+    fn package_json_without_scripts_object_yields_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "package.json", r#"{"scripts":"nope"}"#);
+        assert!(detect(dir.path()).suggestions.is_empty());
+    }
 }

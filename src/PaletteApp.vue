@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import { getConfig, hidePalette, launchProject, openDir } from './api'
 import { filterProjects, sortProjects } from './utils'
@@ -11,12 +11,22 @@ const selected = ref(0)
 const error = ref('')
 const busy = ref(false)
 const inputRef = ref<HTMLInputElement>()
+const listRef = ref<HTMLElement>()
 
 const projects = computed(() =>
   cfg.value ? sortProjects(filterProjects(cfg.value.projects, query.value)) : [],
 )
 const hotkey = computed(() => cfg.value?.settings.hotkey ?? '')
 const hasProjects = computed(() => (cfg.value?.projects.length ?? 0) > 0)
+
+watch(query, () => {
+  selected.value = 0
+})
+
+watch(selected, async () => {
+  await nextTick()
+  listRef.value?.querySelector('.palette-row.active')?.scrollIntoView({ block: 'nearest' })
+})
 
 async function reload() {
   try {
@@ -106,7 +116,7 @@ onUnmounted(() => unlisten?.())
       placeholder="搜索项目（名称或路径）…"
       spellcheck="false"
     />
-    <div v-if="projects.length > 0" class="palette-list">
+    <div v-if="projects.length > 0" ref="listRef" class="palette-list">
       <div
         v-for="(p, i) in projects"
         :key="p.id"

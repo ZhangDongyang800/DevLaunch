@@ -140,6 +140,7 @@ const detectChecked = ref<boolean[]>([])
 const detecting = ref(false)
 watch(() => project.value?.rootDir, () => {
   detectResult.value = null
+  detectChecked.value = []
 })
 
 const ecosystemLabels: Record<string, string> = { node: 'Node', rust: 'Rust', go: 'Go', python: 'Python' }
@@ -152,7 +153,11 @@ const detectTitle = computed(() => {
 
 async function runDetect(notifyError: boolean) {
   const root = project.value.rootDir.trim()
-  if (!root || detecting.value) return
+  if (!root) {
+    if (notifyError) emit('notify', '请先设置项目根目录', 'err')
+    return
+  }
+  if (detecting.value) return
   detecting.value = true
   try {
     const res = await detectProject(root)

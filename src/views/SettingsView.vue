@@ -90,6 +90,7 @@ function comboFromEvent(e: KeyboardEvent): string | null {
 function onRecordKeydown(e: KeyboardEvent) {
   e.preventDefault()
   e.stopPropagation()
+  if (e.repeat) return
   if (e.key === 'Escape') {
     stopRecording()
     return
@@ -113,14 +114,13 @@ function stopRecording() {
 }
 
 async function applyHotkey(combo: string) {
+  stopRecording()
   try {
     await setHotkey(combo)
     config.value = await getConfig()
     emit('notify', `全局快捷键已更新为 ${combo}`)
-    stopRecording()
   } catch (e) {
     emit('notify', `${e}`, 'err')
-    stopRecording()
   }
 }
 

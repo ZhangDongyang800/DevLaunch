@@ -18,12 +18,16 @@ const selectedCount = computed(() => checked.value.filter(Boolean).length)
 const importableCount = computed(() => results.value.filter((r) => !r.alreadyImported).length)
 
 async function choosePath() {
-  const { open } = await import('@tauri-apps/plugin-dialog')
-  const picked = await open({ directory: true, multiple: false })
-  if (typeof picked === 'string') {
-    scanPath.value = picked
-    results.value = []
-    checked.value = []
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const picked = await open({ directory: true, multiple: false })
+    if (typeof picked === 'string') {
+      scanPath.value = picked
+      results.value = []
+      checked.value = []
+    }
+  } catch (e) {
+    emit('notify', `选择目录失败：${e}`, 'err')
   }
 }
 
@@ -31,6 +35,8 @@ async function doScan() {
   const root = scanPath.value.trim()
   if (!root || scanning.value) return
   scanning.value = true
+  results.value = []
+  checked.value = []
   try {
     const found = await scanWorkspace(root)
     results.value = found
@@ -113,7 +119,7 @@ async function importSelected() {
         </label>
         <span class="spacer" />
         <span class="mono scan-count">{{ selectedCount }} / {{ importableCount }}</span>
-        <button class="primary" :disabled="selectedCount === 0 || importing" @click="importSelected">
+        <button class="primary" :disabled="selectedCount === 0 || importing || scanning" @click="importSelected">
           {{ importing ? '导入中…' : `导入选中（${selectedCount}）` }}
         </button>
       </div>
