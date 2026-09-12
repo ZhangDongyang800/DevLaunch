@@ -5,7 +5,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const CONFIG_VERSION: u32 = 3;
+pub const CONFIG_VERSION: u32 = 4;
+pub const MODERN_VERSION: u32 = 3;
+pub const TEMPLATE_VERSION: u32 = 3;
+pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+D";
+
+fn default_hotkey() -> String {
+    DEFAULT_HOTKEY.to_string()
+}
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -35,13 +42,24 @@ pub struct Project {
     pub name: String,
     pub root_dir: String,
     #[serde(default)]
+    pub favorite: bool,
+    #[serde(default)]
+    pub last_launched_at: Option<u64>,
+    #[serde(default)]
     pub items: Vec<Item>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub autostart: bool,
+    pub hotkey: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { autostart: false, hotkey: default_hotkey() }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -130,7 +148,7 @@ fn backup_corrupt(path: &Path) -> std::io::Result<PathBuf> {
     Ok(bak)
 }
 
-/// 版本探测后选择 v3 直接解析或 legacy 迁移（v1/v2）；无 version 但含 items 视为 v3。
+/// 版本探测后选择现代格式直接解析或 legacy 迁移（v1/v2）；无 version 但含 items 视为现代格式。
 fn has_items_key(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Object(map) => {
@@ -141,9 +159,9 @@ fn has_items_key(value: &serde_json::Value) -> bool {
     }
 }
 
-fn probe_v3(value: &serde_json::Value) -> bool {
+fn probe_modern(value: &serde_json::Value) -> bool {
     match value.get("version").and_then(serde_json::Value::as_u64) {
-        Some(v) => v >= u64::from(CONFIG_VERSION),
+        Some(v) => v >= u64::from(MODERN_VERSION),
         None => has_items_key(value),
     }
 }
@@ -152,11 +170,11 @@ fn has_key(value: &serde_json::Value, key: &str) -> bool {
     matches!(value, serde_json::Value::Object(map) if map.contains_key(key))
 }
 
-fn reject_too_new(value: &serde_json::Value) -> Result<(), serde_json::Error> {
+fn reject_too_new(value: &serde_json::Value, max_version: u32) -> Result<(), serde_json::Error> {
     if let Some(v) = value.get("version").and_then(serde_json::Value::as_u64) {
-        if v > u64::from(CONFIG_VERSION) {
+        if v > u64::from(max_version) {
             return Err(serde_json::Error::custom(format!(
-                "文件版本 v{v} 高于当前 DevLaunch 支持的 v{CONFIG_VERSION}，请升级应用后再导入"
+                "文件版本 v{v} 高于当前 DevLaunch 支持的 v{max_version}，请升级应用后再导入"
             )));
         }
     }
@@ -165,13 +183,13 @@ fn reject_too_new(value: &serde_json::Value) -> Result<(), serde_json::Error> {
 
 pub fn parse_config(text: &str) -> Result<AppConfig, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(text)?;
-    reject_too_new(&value)?;
+    reject_too_new(&value, CONFIG_VERSION)?;
     if !has_key(&value, "projects") {
         return Err(serde_json::Error::custom(
             "这不是 DevLaunch 配置备份（缺少 projects 字段）；请选择通过「设置 → 导出」生成的配置文件",
         ));
     }
-    let mut cfg = if probe_v3(&value) {
+    let mut cfg = if probe_modern(&value) {
         let mut cfg: AppConfig = serde_json::from_value(value)?;
         if cfg.version < CONFIG_VERSION {
             cfg.version = CONFIG_VERSION;
@@ -179,7 +197,7 @@ pub fn parse_config(text: &str) -> Result<AppConfig, serde_json::Error> {
         cfg
     } else {
         let legacy: LegacyAppConfig = serde_json::from_value(value)?;
-        legacy.into_v3()
+        legacy.into_config()
     };
     normalize_ids(&mut cfg);
     Ok(cfg)
@@ -244,21 +262,23 @@ struct LegacyStep {
 }
 
 impl LegacyAppConfig {
-    fn into_v3(self) -> AppConfig {
+    fn into_config(self) -> AppConfig {
         AppConfig {
             version: CONFIG_VERSION,
-            settings: Settings { autostart: self.settings.autostart },
-            projects: self.projects.into_iter().map(LegacyProject::into_v3).collect(),
+            settings: Settings { autostart: self.settings.autostart, ..Settings::default() },
+            projects: self.projects.into_iter().map(LegacyProject::into_config).collect(),
         }
     }
 }
 
 impl LegacyProject {
-    fn into_v3(self) -> Project {
+    fn into_config(self) -> Project {
         Project {
             id: self.id,
             name: self.name,
             root_dir: self.root_dir,
+            favorite: false,
+            last_launched_at: None,
             items: self.groups.into_iter().filter_map(LegacyGroup::into_item).collect(),
         }
     }
@@ -359,7 +379,7 @@ fn default_template_version() -> u32 {
 
 impl ProjectTemplate {
     pub fn from_project(p: &Project) -> Self {
-        Self { version: CONFIG_VERSION, name: p.name.clone(), items: p.items.clone() }
+        Self { version: TEMPLATE_VERSION, name: p.name.clone(), items: p.items.clone() }
     }
 
     pub fn load(path: &Path) -> Result<ProjectTemplate, String> {
@@ -370,21 +390,21 @@ impl ProjectTemplate {
 
 pub fn parse_template(text: &str) -> Result<ProjectTemplate, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(text)?;
-    reject_too_new(&value)?;
+    reject_too_new(&value, TEMPLATE_VERSION)?;
     if has_key(&value, "projects") || !(has_key(&value, "items") || has_key(&value, "groups")) {
         return Err(serde_json::Error::custom(
             "这不是项目配置文件（需要 items 或 groups 字段）；请选择「导出到项目根」生成的文件",
         ));
     }
-    let mut tpl = if probe_v3(&value) {
+    let mut tpl = if probe_modern(&value) {
         let mut tpl: ProjectTemplate = serde_json::from_value(value)?;
-        if tpl.version < CONFIG_VERSION {
-            tpl.version = CONFIG_VERSION;
+        if tpl.version < TEMPLATE_VERSION {
+            tpl.version = TEMPLATE_VERSION;
         }
         tpl
     } else {
         let legacy: LegacyTemplate = serde_json::from_value(value)?;
-        legacy.into_v3()
+        legacy.into_template()
     };
     normalize_item_ids(&mut tpl.items);
     Ok(tpl)
@@ -400,9 +420,9 @@ struct LegacyTemplate {
 }
 
 impl LegacyTemplate {
-    fn into_v3(self) -> ProjectTemplate {
+    fn into_template(self) -> ProjectTemplate {
         ProjectTemplate {
-            version: CONFIG_VERSION,
+            version: TEMPLATE_VERSION,
             name: self.name,
             items: self.groups.into_iter().filter_map(LegacyGroup::into_item).collect(),
         }
@@ -419,6 +439,8 @@ mod tests {
             id: "p1".into(),
             name: "PVDS".into(),
             root_dir: r"D:\Projects\PVDS".into(),
+            favorite: false,
+            last_launched_at: None,
             items: vec![Item {
                 id: "i1".into(),
                 name: "server".into(),
@@ -427,6 +449,62 @@ mod tests {
                 command: "python app.py".into(),
             }],
         }
+    }
+
+    #[test]
+    fn settings_default_uses_default_hotkey() {
+        assert_eq!(Settings::default().hotkey, DEFAULT_HOTKEY);
+        assert_eq!(DEFAULT_HOTKEY, "Ctrl+Alt+D");
+    }
+
+    #[test]
+    fn v3_config_migrates_to_v4_preserving_projects_and_items() {
+        let v3 = r#"{
+            "version": 3,
+            "settings": {"autostart": true},
+            "projects": [{
+                "id": "p1", "name": "XingTu", "rootDir": "D:\\proj",
+                "items": [{"id": "i1", "name": "后端", "workDir": "backend", "shell": "cmd", "command": "python app.py"}]
+            }]
+        }"#;
+        let cfg = parse_config(v3).unwrap();
+        assert_eq!(cfg.version, CONFIG_VERSION);
+        assert!(cfg.settings.autostart);
+        assert_eq!(cfg.settings.hotkey, DEFAULT_HOTKEY);
+        assert_eq!(cfg.projects.len(), 1);
+        assert_eq!(cfg.projects[0].items.len(), 1);
+        assert_eq!(cfg.projects[0].items[0].command, "python app.py");
+        assert!(!cfg.projects[0].favorite);
+        assert_eq!(cfg.projects[0].last_launched_at, None);
+    }
+
+    #[test]
+    fn new_project_fields_serialize_camel_case() {
+        let mut p = sample_project();
+        p.favorite = true;
+        p.last_launched_at = Some(1757577600);
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"favorite\":true"), "{json}");
+        assert!(json.contains("\"lastLaunchedAt\":1757577600"), "{json}");
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn template_keeps_template_version_three() {
+        let tpl = ProjectTemplate::from_project(&sample_project());
+        assert_eq!(tpl.version, TEMPLATE_VERSION);
+        let json = serde_json::to_string(&tpl).unwrap();
+        let back = parse_template(&json).unwrap();
+        assert_eq!(back.version, TEMPLATE_VERSION);
+    }
+
+    #[test]
+    fn too_new_rejected_per_file_type() {
+        assert!(parse_config(r#"{"version":5,"projects":[]}"#).is_err());
+        assert!(parse_config(r#"{"version":4,"projects":[]}"#).is_ok());
+        assert!(parse_template(r#"{"version":4,"name":"X","items":[]}"#).is_err());
+        assert!(parse_template(r#"{"version":3,"name":"X","items":[]}"#).is_ok());
     }
 
     #[test]
@@ -491,7 +569,7 @@ mod tests {
             }]
         }"#;
         let cfg = parse_config(v2).unwrap();
-        assert_eq!(cfg.version, 3);
+        assert_eq!(cfg.version, CONFIG_VERSION);
         assert!(cfg.settings.autostart);
         let p = &cfg.projects[0];
         assert_eq!(p.items.len(), 2);
@@ -559,7 +637,7 @@ mod tests {
     fn legacy_template_migrates_and_exports_v3() {
         let tpl = r#"{"version":2,"name":"PVDS","groups":[{"id":"g1","name":"默认","terminal":"cmd","steps":[{"id":"s1","workDir":"server","terminal":"cmd","command":"python app.py","readyCondition":{"type":"immediate"}}]}]}"#;
         let t = parse_template(tpl).unwrap();
-        assert_eq!(t.version, 3);
+        assert_eq!(t.version, TEMPLATE_VERSION);
         assert_eq!(t.items.len(), 1);
         assert_eq!(t.items[0].work_dir.as_deref(), Some("server"));
         let json = serde_json::to_string(&t).unwrap();
@@ -588,7 +666,7 @@ mod tests {
     fn versionless_v3_template_with_items_parses() {
         let json = r#"{"name":"XingTu","items":[{"id":"i1","name":"后端","shell":"cmd","command":"python app.py"}]}"#;
         let tpl = parse_template(json).unwrap();
-        assert_eq!(tpl.version, CONFIG_VERSION);
+        assert_eq!(tpl.version, TEMPLATE_VERSION);
         assert_eq!(tpl.name, "XingTu");
         assert_eq!(tpl.items.len(), 1);
         assert_eq!(tpl.items[0].command, "python app.py");
@@ -676,12 +754,6 @@ mod tests {
         let cfg = r#"{"version":3,"settings":{"autostart":false},"projects":[]}"#;
         let err = parse_template(cfg).unwrap_err().to_string();
         assert!(err.contains("items") || err.contains("groups"), "{err}");
-    }
-
-    #[test]
-    fn too_new_version_rejected_in_config_and_template() {
-        assert!(parse_config(r#"{"version":9,"projects":[]}"#).is_err());
-        assert!(parse_template(r#"{"version":9,"name":"X","items":[]}"#).is_err());
     }
 
     #[test]

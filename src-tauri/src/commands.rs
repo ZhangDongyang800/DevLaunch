@@ -95,6 +95,8 @@ mod tests {
             id: id.into(),
             name: "PVDS".into(),
             root_dir: r"D:\Projects\PVDS".into(),
+            favorite: false,
+            last_launched_at: None,
             items: vec![Item {
                 id: "i1".into(),
                 name: "server".into(),
@@ -179,6 +181,8 @@ mod tests {
             id: "p1".into(),
             name: "App".into(),
             root_dir: dir.path().join("app").to_string_lossy().to_uppercase(),
+            favorite: false,
+            last_launched_at: None,
             items: vec![],
         });
         let got = scan_with_config(dir.path().to_str().unwrap(), &cfg).unwrap();

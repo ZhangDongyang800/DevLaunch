@@ -91,6 +91,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("backend")).unwrap();
         let p = Project {
             id: "p1".into(), name: "X".into(), root_dir: dir.path().to_string_lossy().to_string(),
+            favorite: false, last_launched_at: None,
             items: vec![Item { id: "i1".into(), name: "后端".into(), work_dir: Some("backend".into()), shell: Shell::Cmd, command: "python app.py".into() }],
         };
         (dir, p)
