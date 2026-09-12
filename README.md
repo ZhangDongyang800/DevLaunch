@@ -91,7 +91,7 @@ Each startup item has:
 | ----------- | -------------------------------------- |
 | Name        | The name of the startup item           |
 | Working dir | Where the command runs                 |
-| Shell       | `cmd` / PowerShell                     |
+| Shell       | `cmd` / PowerShell / Git Bash         |
 | Command     | The command to run, multi-line allowed |
 
 For example:

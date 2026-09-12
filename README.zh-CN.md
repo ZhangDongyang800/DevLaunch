@@ -91,7 +91,7 @@ npm run tauri build   # 产物：src-tauri/target/release/
 | -------- | ---------------------- |
 | 名称     | 启动项名称             |
 | 工作目录 | 命令执行的位置         |
-| Shell    | `cmd` / PowerShell     |
+| Shell    | `cmd` / PowerShell / Git Bash          |
 | 命令     | 要执行的命令，支持多行 |
 
 例如：
