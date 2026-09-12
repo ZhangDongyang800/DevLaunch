@@ -124,6 +124,90 @@ pub fn resolve_wt_path() -> Option<PathBuf> {
     )
 }
 
+/// Windows 路径 → MSYS/Git Bash 路径：D:\a\b → /d/a/b；UNC → //server/share/...。
+pub fn to_msys_path(path: &Path) -> String {
+    let s = path.display().to_string();
+    if let Some(rest) = s.strip_prefix("\\\\") {
+        return format!("//{}", rest.replace('\\', "/"));
+    }
+    let normalized = s.replace('\\', "/");
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        let drive = (bytes[0] as char).to_ascii_lowercase();
+        let rest = normalized[2..].trim_start_matches('/');
+        return if rest.is_empty() { format!("/{drive}") } else { format!("/{drive}/{rest}") };
+    }
+    normalized
+}
+
+/// bash 窗格脚本：cd → 用户命令原文（不逐行回显）→ exec 保持窗口。
+pub fn bash_pane_script(work_dir: &Path, command: &str) -> String {
+    let dir = to_msys_path(work_dir).replace('\'', "'\\''");
+    let mut script = format!("cd '{dir}'");
+    if !command.trim().is_empty() {
+        script.push('\n');
+        script.push_str(command);
+    }
+    script.push_str("\nexec bash -il");
+    script
+}
+
+pub fn encode_bash_script(script: &str) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(script.as_bytes())
+}
+
+/// 固定外壳：用户内容只存在于 base64，不参与任何引号解析。
+pub fn bash_launch_args(work_dir: &Path, command: &str) -> String {
+    let b64 = encode_bash_script(&bash_pane_script(work_dir, command));
+    format!("-lc \"bash -l <(base64 -d<<<{b64})\"")
+}
+
+pub fn resolve_bash_with(
+    override_path: Option<&OsStr>,
+    program_files: Option<&OsStr>,
+    program_files_x86: Option<&OsStr>,
+    path_env: Option<&OsStr>,
+) -> Option<PathBuf> {
+    if let Some(p) = override_path {
+        if p.is_empty() {
+            return None;
+        }
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    for root in [program_files, program_files_x86].into_iter().flatten() {
+        let cand = PathBuf::from(root).join("Git").join("bin").join("bash.exe");
+        if cand.is_file() {
+            return Some(cand);
+        }
+    }
+    if let Some(paths) = path_env {
+        for dir in std::env::split_paths(paths) {
+            let lower = dir.to_string_lossy().to_ascii_lowercase();
+            if lower.ends_with("system32") || lower.ends_with("windowsapps") {
+                continue;
+            }
+            let cand = dir.join("bash.exe");
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    None
+}
+
+pub fn resolve_bash_path() -> Option<PathBuf> {
+    resolve_bash_with(
+        std::env::var_os("DEVLAUNCH_BASH_PATH").as_deref(),
+        std::env::var_os("ProgramFiles").as_deref(),
+        std::env::var_os("ProgramFiles(x86)").as_deref(),
+        std::env::var_os("PATH").as_deref(),
+    )
+}
+
 pub fn build_wt_commandline(project_name: &str, panes: &[PaneSpec]) -> String {
     let mut line = String::from("-w -1");
     for (i, p) in panes.iter().enumerate() {
@@ -540,5 +624,91 @@ mod tests {
         let panes = vec![pane("t", r"D:\p", Shell::Cmd, &"a".repeat(40_000))];
         let err = plan_spawn(Some(&fake), "X", &panes).unwrap_err();
         assert!(err.contains("30000"));
+    }
+
+    #[test]
+    fn to_msys_path_matrix() {
+        assert_eq!(to_msys_path(Path::new(r"D:\Projects\foo")), "/d/Projects/foo");
+        assert_eq!(to_msys_path(Path::new(r"D:\")), "/d");
+        assert_eq!(to_msys_path(Path::new(r"D:\My Proj\a")), "/d/My Proj/a");
+        assert_eq!(to_msys_path(Path::new(r"D:/already/forward")), "/d/already/forward");
+        assert_eq!(to_msys_path(Path::new(r"\\server\share\dir")), "//server/share/dir");
+    }
+
+    #[test]
+    fn bash_pane_script_contains_cd_command_and_stays_open() {
+        let script = bash_pane_script(Path::new(r"D:\My Proj"), "npm run dev\nnpm test");
+        assert!(script.starts_with("cd '/d/My Proj'"), "{script}");
+        assert!(script.contains("npm run dev\nnpm test"), "{script}");
+        assert!(script.ends_with("exec bash -il"), "{script}");
+    }
+
+    #[test]
+    fn bash_pane_script_escapes_single_quotes_in_path() {
+        let script = bash_pane_script(Path::new(r"D:\it's here"), "echo ok");
+        assert!(script.contains(r"cd '/d/it'\''s here'"), "{script}");
+    }
+
+    #[test]
+    fn bash_pane_script_empty_command_still_stays_open() {
+        let script = bash_pane_script(Path::new(r"D:\p"), "   ");
+        assert_eq!(script, "cd '/d/p'\nexec bash -il");
+    }
+
+    #[test]
+    fn encode_bash_script_roundtrips_utf8() {
+        use base64::Engine;
+        let script = "cd '/d/项目'\necho \"a b\"\nexec bash -il";
+        let b64 = encode_bash_script(script);
+        let decoded = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+        assert_eq!(String::from_utf8(decoded).unwrap(), script);
+    }
+
+    #[test]
+    fn bash_launch_args_wraps_and_hides_user_command() {
+        let args = bash_launch_args(Path::new(r"D:\p"), "secret-cmd $(rm)");
+        assert!(args.starts_with("-lc \"bash -l <(base64 -d<<<"), "{args}");
+        assert!(args.ends_with(")\""), "{args}");
+        assert!(!args.contains("secret-cmd"), "{args}");
+    }
+
+    #[test]
+    fn resolve_bash_prefers_override_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("bash.exe");
+        std::fs::write(&fake, "x").unwrap();
+        let got = resolve_bash_with(Some(fake.as_os_str()), None, None, None);
+        assert_eq!(got.as_deref(), Some(fake.as_path()));
+    }
+
+    #[test]
+    fn resolve_bash_empty_override_forces_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("bash.exe");
+        std::fs::write(&fake, "x").unwrap();
+        assert_eq!(resolve_bash_with(Some(OsStr::new("")), None, None, Some(dir.path().as_os_str())), None);
+    }
+
+    #[test]
+    fn resolve_bash_falls_back_to_program_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let bash = dir.path().join("Git").join("bin").join("bash.exe");
+        std::fs::create_dir_all(bash.parent().unwrap()).unwrap();
+        std::fs::write(&bash, "x").unwrap();
+        let got = resolve_bash_with(None, Some(dir.path().as_os_str()), None, None);
+        assert_eq!(got.as_deref(), Some(bash.as_path()));
+    }
+
+    #[test]
+    fn resolve_bash_path_scan_skips_system32_and_windowsapps() {
+        let dir = tempfile::tempdir().unwrap();
+        let system32 = dir.path().join("System32");
+        let winapps = dir.path().join("WindowsApps");
+        std::fs::create_dir_all(&system32).unwrap();
+        std::fs::create_dir_all(&winapps).unwrap();
+        std::fs::write(system32.join("bash.exe"), "x").unwrap();
+        std::fs::write(winapps.join("bash.exe"), "x").unwrap();
+        let joined = std::env::join_paths([&system32, &winapps]).unwrap();
+        assert_eq!(resolve_bash_with(None, None, None, Some(joined.as_os_str())), None);
     }
 }
