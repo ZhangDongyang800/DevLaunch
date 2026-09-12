@@ -118,7 +118,7 @@ python -m uvicorn main:app --reload
     {
       "name": "后端",
       "workDir": "backend",          // 相对项目根目录；留空 = 根目录
-      "shell": "cmd",                // "cmd" | "powershell"
+      "shell": "cmd",                // "cmd" | "powershell" | "bash"
       "command": "conda activate app\npython -m uvicorn main:app --reload"
     }
   ]

@@ -118,7 +118,7 @@ python -m uvicorn main:app --reload
     {
       "name": "Backend",
       "workDir": "backend",          // relative to the project root; empty = root
-      "shell": "cmd",                // "cmd" | "powershell"
+      "shell": "cmd",                // "cmd" | "powershell" | "bash"
       "command": "conda activate app\npython -m uvicorn main:app --reload"
     }
   ]
