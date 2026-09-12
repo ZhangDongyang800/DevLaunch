@@ -244,14 +244,6 @@ input.inline {
 input.inline:hover { background: var(--panel); border-color: transparent; }
 input.inline:focus { background: var(--bg); border-color: var(--border-strong); }
 
-label {
-  font-size: 12px;
-  color: var(--muted);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
 .row { display: flex; gap: 6px; align-items: center; }
 .grow { flex: 1; }
 
