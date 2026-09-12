@@ -432,8 +432,24 @@ pub fn export_config_to(state: State<AppState>, path: String) -> Result<(), Stri
 pub fn import_config_from(app: AppHandle, state: State<AppState>, path: String) -> Result<(), String> {
     let text = fs::read_to_string(&path).map_err(|e| format!("读取失败：{e}"))?;
     let cfg = crate::config::parse_config(&text).map_err(|e| format!("配置文件格式错误：{e}"))?;
+    let old_hotkey = state.config.lock().unwrap().settings.hotkey.clone();
+    let new_hotkey = cfg.settings.hotkey.clone();
+    if new_hotkey != old_hotkey {
+        if let Err(e) = crate::hotkey::register(&app, &new_hotkey) {
+            let _ = crate::hotkey::register(&app, &old_hotkey);
+            return Err(format!("导入失败：{e}"));
+        }
+    }
     backup_config_file(&state.path);
-    apply_config(&state, cfg)?;
+    if let Err(e) = apply_config(&state, cfg) {
+        if new_hotkey != old_hotkey {
+            let _ = crate::hotkey::register(&app, &old_hotkey);
+        }
+        return Err(e);
+    }
+    if let Ok(mut g) = state.hotkey.lock() {
+        *g = Some(new_hotkey);
+    }
     tray::rebuild(&app);
     Ok(())
 }

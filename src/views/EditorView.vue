@@ -85,9 +85,9 @@ async function tryRunItem(it: Item) {
     emit('notify', `已启动「${it.name || '启动项'}」`)
     getConfig()
       .then((c) => {
-        const wasDirty = dirty.value
+        if (dirty.value) return
         config.value = c
-        if (!wasDirty) savedSnapshot.value = JSON.stringify(project.value)
+        savedSnapshot.value = JSON.stringify(project.value)
       })
       .catch(() => {})
   } catch (e) {
