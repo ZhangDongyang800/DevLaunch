@@ -880,3 +880,4 @@ h1 {
 .filter-input { width: 160px; }
 button.star { color: var(--faint); }
 button.star.on { color: var(--signal); }
+.hotkey-input { width: 150px; text-align: center; }
