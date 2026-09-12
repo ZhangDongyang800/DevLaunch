@@ -23,7 +23,7 @@ pub enum LaunchMode {
 
 #[derive(Debug)]
 pub struct FallbackLaunch {
-    pub program: &'static str,
+    pub program: String,
     pub args: String,
     pub work_dir: PathBuf,
 }
@@ -208,7 +208,7 @@ pub fn resolve_bash_path() -> Option<PathBuf> {
     )
 }
 
-pub fn build_wt_commandline(project_name: &str, panes: &[PaneSpec]) -> String {
+pub fn build_wt_commandline(project_name: &str, panes: &[PaneSpec], resolved_bash: Option<&Path>) -> String {
     let mut line = String::from("-w -1");
     for (i, p) in panes.iter().enumerate() {
         let title = if i == 0 { project_name } else { &p.title };
@@ -229,7 +229,13 @@ pub fn build_wt_commandline(project_name: &str, panes: &[PaneSpec]) -> String {
                 line.push_str(" powershell -NoExit -ExecutionPolicy Bypass -EncodedCommand ");
                 line.push_str(&encode_ps_command(&ps_pane_script(&p.work_dir, &p.command)));
             }
-            Shell::Bash => unreachable!("bash panes are rejected in plan_spawn"),
+            Shell::Bash => {
+                let bash = resolved_bash.unwrap_or_else(|| Path::new("bash"));
+                line.push(' ');
+                line.push_str(&quote_wt_arg(&bash.display().to_string()));
+                line.push(' ');
+                line.push_str(&bash_launch_args(&p.work_dir, &p.command));
+            }
         }
     }
     line
@@ -260,6 +266,7 @@ fn commandline_utf16_len(program: &str, args: &str) -> usize {
 
 pub fn plan_spawn(
     resolved_wt: Option<&Path>,
+    resolved_bash: Option<&Path>,
     project_name: &str,
     panes: &[PaneSpec],
 ) -> Result<SpawnPlan, String> {
@@ -267,14 +274,16 @@ pub fn plan_spawn(
         return Err("没有可启动的启动项".into());
     }
     if let Some(p) = panes.iter().find(|p| p.shell == Shell::Bash) {
-        return Err(format!(
-            "启动项「{}」暂不支持 Git Bash（等待后续版本接线）",
-            p.title
-        ));
+        if resolved_bash.is_none() {
+            return Err(format!(
+                "启动项「{}」需要 Git Bash，但未找到；请安装 Git for Windows 或设置 DEVLAUNCH_BASH_PATH",
+                p.title
+            ));
+        }
     }
     match resolved_wt {
         Some(wt) => {
-            let args = build_wt_commandline(project_name, panes);
+            let args = build_wt_commandline(project_name, panes, resolved_bash);
             validate_wt_commandline(&args)?;
             Ok(SpawnPlan::Wt { program: wt.to_path_buf(), args })
         }
@@ -283,18 +292,22 @@ pub fn plan_spawn(
             for p in panes {
                 let launch = match p.shell {
                     Shell::Cmd => FallbackLaunch {
-                        program: "cmd",
+                        program: "cmd".to_string(),
                         args: cmd_launch_args(&p.work_dir, &p.command),
                         work_dir: p.work_dir.clone(),
                     },
                     Shell::PowerShell => FallbackLaunch {
-                        program: "powershell",
+                        program: "powershell".to_string(),
                         args: ps_launch_args(&p.work_dir, &p.command),
                         work_dir: p.work_dir.clone(),
                     },
-                    Shell::Bash => unreachable!("bash panes are rejected in plan_spawn"),
+                    Shell::Bash => FallbackLaunch {
+                        program: resolved_bash.unwrap_or_else(|| Path::new("bash")).display().to_string(),
+                        args: bash_launch_args(&p.work_dir, &p.command),
+                        work_dir: p.work_dir.clone(),
+                    },
                 };
-                if commandline_utf16_len(launch.program, &launch.args) > MAX_COMMANDLINE_UTF16 {
+                if commandline_utf16_len(&launch.program, &launch.args) > MAX_COMMANDLINE_UTF16 {
                     return Err(format!("启动项「{}」命令过长，请拆分启动项", p.title));
                 }
                 launches.push(launch);
@@ -306,7 +319,8 @@ pub fn plan_spawn(
 
 pub fn spawn_panes(project_name: &str, panes: &[PaneSpec]) -> std::io::Result<LaunchMode> {
     let resolved = resolve_wt_path();
-    match plan_spawn(resolved.as_deref(), project_name, panes) {
+    let resolved_bash = resolve_bash_path();
+    match plan_spawn(resolved.as_deref(), resolved_bash.as_deref(), project_name, panes) {
         Ok(SpawnPlan::Wt { program, args }) => {
             Command::new(program).raw_arg(args).spawn()?;
             Ok(LaunchMode::WindowsTerminal)
@@ -411,7 +425,7 @@ mod tests {
             pane("后端", r"D:\p\backend", Shell::Cmd, "python app.py"),
             pane("前端", r"D:\p\frontend", Shell::PowerShell, "npm run dev"),
         ];
-        let line = build_wt_commandline("XingTu", &panes);
+        let line = build_wt_commandline("XingTu", &panes, None);
         assert_eq!(
             line,
             format!(
@@ -443,7 +457,7 @@ mod tests {
         ];
         for (label, cmd) in cases {
             let cpane = pane("t", r"D:\p", Shell::Cmd, cmd);
-            let line = build_wt_commandline("X", &[cpane]);
+            let line = build_wt_commandline("X", &[cpane], None);
             let expected_pane = format!(
                 r#"cd /d "D:\p" && echo {} && {cmd}"#,
                 escape_echo_text(&format!("D:\\p>{cmd}"))
@@ -456,7 +470,7 @@ mod tests {
             assert_eq!(cmd_pane_command(Path::new(r"D:\p"), cmd), expected_pane, "cmd_pane case {label}");
 
             let ppane = pane("t", r"D:\p", Shell::PowerShell, cmd);
-            let line = build_wt_commandline("X", &[ppane]);
+            let line = build_wt_commandline("X", &[ppane], None);
             assert_eq!(
                 line,
                 format!(
@@ -478,7 +492,7 @@ mod tests {
     fn escape_matrix_path_with_spaces() {
         let cpane = pane("t", r"D:\My Proj", Shell::Cmd, "npm run dev");
         assert_eq!(
-            build_wt_commandline("X", &[cpane]),
+            build_wt_commandline("X", &[cpane], None),
             r#"-w -1 nt -d "D:\My Proj" --title "X" --suppressApplicationTitle cmd /K "cd /d "D:\My Proj" && echo D:\My Proj^>npm run dev && npm run dev""#
         );
     }
@@ -486,14 +500,14 @@ mod tests {
     #[test]
     fn wt_args_escape_trailing_backslash() {
         let panes = vec![pane("t", r"D:\", Shell::Cmd, "echo hi")];
-        let line = build_wt_commandline("X\\", &panes);
+        let line = build_wt_commandline("X\\", &panes, None);
         assert!(line.contains(r#"-d "D:\\" --title "X\\""#), "{line}");
     }
 
     #[test]
     fn wt_title_replaces_quotes_and_escapes_trailing_backslash() {
         let panes = vec![pane("t", r"D:\p", Shell::Cmd, "echo hi")];
-        let line = build_wt_commandline("a\"b\\", &panes);
+        let line = build_wt_commandline("a\"b\\", &panes, None);
         assert!(line.contains(r#"--title "a'b\\""#), "{line}");
         assert!(!line.contains(r#"--title "a"b"#), "{line}");
     }
@@ -501,7 +515,7 @@ mod tests {
     #[test]
     fn plan_spawn_fallback_rejects_overlong_commandline() {
         let panes = vec![pane("t", r"D:\p", Shell::Cmd, &"a".repeat(40_000))];
-        let err = plan_spawn(None, "X", &panes).unwrap_err();
+        let err = plan_spawn(None, None, "X", &panes).unwrap_err();
         assert!(err.contains("过长") || err.contains("30000"), "{err}");
     }
 
@@ -580,10 +594,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fake = fake_wt(dir.path());
         let panes = vec![pane("t", r"D:\p", Shell::Cmd, "echo hi")];
-        match plan_spawn(Some(&fake), "X", &panes).unwrap() {
+        match plan_spawn(Some(&fake), None, "X", &panes).unwrap() {
             SpawnPlan::Wt { program, args } => {
                 assert_eq!(program, fake);
-                assert_eq!(args, build_wt_commandline("X", &panes));
+                assert_eq!(args, build_wt_commandline("X", &panes, None));
             }
             SpawnPlan::Fallback { .. } => panic!("expected Wt plan"),
         }
@@ -595,7 +609,7 @@ mod tests {
             pane("后端", r"D:\p\backend", Shell::Cmd, "python app.py"),
             pane("前端", r"D:\p\frontend", Shell::PowerShell, "npm run dev"),
         ];
-        match plan_spawn(None, "X", &panes).unwrap() {
+        match plan_spawn(None, None, "X", &panes).unwrap() {
             SpawnPlan::Fallback { launches } => {
                 assert_eq!(launches.len(), 2);
                 assert_eq!(launches[0].program, "cmd");
@@ -613,8 +627,8 @@ mod tests {
     fn plan_spawn_rejects_empty_panes() {
         let dir = tempfile::tempdir().unwrap();
         let fake = fake_wt(dir.path());
-        assert!(plan_spawn(None, "X", &[]).is_err());
-        assert!(plan_spawn(Some(&fake), "X", &[]).is_err());
+        assert!(plan_spawn(None, None, "X", &[]).is_err());
+        assert!(plan_spawn(Some(&fake), None, "X", &[]).is_err());
     }
 
     #[test]
@@ -622,7 +636,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fake = fake_wt(dir.path());
         let panes = vec![pane("t", r"D:\p", Shell::Cmd, &"a".repeat(40_000))];
-        let err = plan_spawn(Some(&fake), "X", &panes).unwrap_err();
+        let err = plan_spawn(Some(&fake), None, "X", &panes).unwrap_err();
         assert!(err.contains("30000"));
     }
 
@@ -710,5 +724,34 @@ mod tests {
         std::fs::write(winapps.join("bash.exe"), "x").unwrap();
         let joined = std::env::join_paths([&system32, &winapps]).unwrap();
         assert_eq!(resolve_bash_with(None, None, None, Some(joined.as_os_str())), None);
+    }
+
+    #[test]
+    fn wt_bash_pane_uses_absolute_path_and_hides_command() {
+        let panes = vec![pane("bash", r"D:\p", Shell::Bash, "echo hi")];
+        let bash = Path::new(r"C:\Program Files\Git\bin\bash.exe");
+        let line = build_wt_commandline("X", &panes, Some(bash));
+        assert!(line.contains(r#""C:\Program Files\Git\bin\bash.exe" -lc "bash -l <(base64 -d<<<"#), "{line}");
+        assert!(!line.contains("echo hi"), "{line}");
+    }
+
+    #[test]
+    fn plan_spawn_bash_without_resolved_bash_errors() {
+        let panes = vec![pane("bash", r"D:\p", Shell::Bash, "echo hi")];
+        let err = plan_spawn(None, None, "X", &panes).unwrap_err();
+        assert!(err.contains("Git Bash"), "{err}");
+    }
+
+    #[test]
+    fn plan_spawn_fallback_bash_uses_resolved_path() {
+        let panes = vec![pane("bash", r"D:\p", Shell::Bash, "echo hi")];
+        let bash = Path::new(r"C:\Git\bin\bash.exe");
+        match plan_spawn(None, Some(bash), "X", &panes).unwrap() {
+            SpawnPlan::Fallback { launches } => {
+                assert_eq!(launches[0].program, r"C:\Git\bin\bash.exe");
+                assert!(launches[0].args.contains("base64 -d<<<"));
+            }
+            other => panic!("expected fallback, got {other:?}"),
+        }
     }
 }
