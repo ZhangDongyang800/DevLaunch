@@ -21,3 +21,6 @@ export const setAutostart = (enabled: boolean) => invoke<void>('set_autostart', 
 
 export const detectProject = (path: string) => invoke<DetectResult>('detect_project', { path })
 export const scanWorkspace = (path: string) => invoke<DetectedProject[]>('scan_workspace', { path })
+
+export const setHotkey = (hotkey: string) => invoke<void>('set_hotkey', { hotkey })
+export const hidePalette = () => invoke<void>('hide_palette')

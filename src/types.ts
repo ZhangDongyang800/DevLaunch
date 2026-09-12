@@ -18,11 +18,14 @@ export interface Project {
   id: string
   name: string
   rootDir: string
+  favorite: boolean
+  lastLaunchedAt?: number | null
   items: Item[]
 }
 
 export interface Settings {
   autostart: boolean
+  hotkey: string
 }
 
 export interface AppConfig {

@@ -60,7 +60,7 @@ async function open(path: string) {
 
 function createProject() {
   if (!config.value) return
-  const p = { id: newId(), name: '新项目', rootDir: '', items: [] }
+  const p = { id: newId(), name: '新项目', rootDir: '', favorite: false, items: [] }
   config.value.projects.push(p)
   persist().catch((e) => emit('notify', `保存失败：${e}`, 'err'))
   emit('edit', p.id)

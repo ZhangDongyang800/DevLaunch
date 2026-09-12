@@ -60,6 +60,7 @@ async function importSelected() {
         id: newId(),
         name: r.name,
         rootDir: r.rootDir,
+        favorite: false,
         items: r.suggestions.map((s) => ({
           id: newId(),
           name: s.name,
