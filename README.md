@@ -66,6 +66,10 @@ Of course, it cannot fix bugs or other development problems for you. It only wor
 
 - **Tray resident**: launch any project from the right-click menu, with optional launch at login
 
+- **Global shortcut**: press `Ctrl+Alt+D` to open a search palette — type to filter, press Enter to launch. Rebindable in Settings.
+
+- **Favorites and recents**: pin frequently used projects; launched projects are ordered by recency.
+
 ## Quick Start
 
 **Install**: download the `.msi` or `-setup.exe` from [Releases](../../releases), or build from source:
