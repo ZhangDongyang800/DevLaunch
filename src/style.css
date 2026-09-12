@@ -876,3 +876,7 @@ h1 {
   color: var(--faint);
   font-size: 10.5px;
 }
+
+.filter-input { width: 160px; }
+button.star { color: var(--faint); }
+button.star.on { color: var(--signal); }

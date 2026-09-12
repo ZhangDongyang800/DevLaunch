@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { config, persist } from '../store'
-import { detectProject, exportProjectFile, launchItem, listSubdirs, readProjectTemplate } from '../api'
+import { detectProject, exportProjectFile, getConfig, launchItem, listSubdirs, readProjectTemplate } from '../api'
 import { newId, newItem, type DetectResult, type Item } from '../types'
 
 const props = defineProps<{ projectId: string }>()
@@ -83,6 +83,9 @@ async function tryRunItem(it: Item) {
     savedSnapshot.value = JSON.stringify(project.value)
     await launchItem(project.value.id, it.id)
     emit('notify', `已启动「${it.name || '启动项'}」`)
+    getConfig()
+      .then((c) => (config.value = c))
+      .catch(() => {})
   } catch (e) {
     emit('notify', `${e}`, 'err')
   } finally {

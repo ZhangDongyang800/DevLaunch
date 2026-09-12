@@ -1,12 +1,26 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { config, persist } from '../store'
-import { newId, type Item } from '../types'
-import { launchProject, openDir } from '../api'
+import { newId, type Item, type Project } from '../types'
+import { getConfig, launchProject, openDir } from '../api'
+import { filterProjects, sortProjects } from '../utils'
 
 const emit = defineEmits<{ edit: [projectId: string]; scan: []; notify: [msg: string, kind?: 'ok' | 'err'] }>()
 
 const projects = computed(() => config.value?.projects ?? [])
+const query = ref('')
+const visibleProjects = computed(() => sortProjects(filterProjects(projects.value, query.value)))
+
+async function toggleFavorite(p: Project) {
+  const next = !p.favorite
+  p.favorite = next
+  try {
+    await persist()
+  } catch (e) {
+    p.favorite = !next
+    emit('notify', `收藏失败：${e}`, 'err')
+  }
+}
 
 const confirmDeleteId = ref('')
 const launchingId = ref('')
@@ -43,6 +57,9 @@ async function launch(id: string) {
     await launchProject(id)
     lastLaunchAt.set(id, Date.now())
     emit('notify', '已开始启动…')
+    getConfig()
+      .then((c) => (config.value = c))
+      .catch(() => {})
   } catch (e) {
     emit('notify', `启动失败：${e}`, 'err')
   } finally {
@@ -72,6 +89,7 @@ function createProject() {
     <div class="home-head">
       <h1>启动台</h1>
       <span class="row">
+        <input v-model="query" class="inline filter-input mono" placeholder="过滤项目…" spellcheck="false" />
         <span class="home-count mono">{{ projects.length }} PROJECTS</span>
         <button class="bordered" @click="emit('scan')">扫描工作区</button>
         <button class="bordered" @click="createProject">+ 新建项目</button>
@@ -85,9 +103,14 @@ function createProject() {
       <button class="bordered" @click="emit('scan')">扫描工作区</button>
     </div>
 
+    <div v-else-if="visibleProjects.length === 0" class="empty-state">
+      <div class="empty-title">无匹配项目</div>
+      <div class="empty-sub">换个关键词试试</div>
+    </div>
+
     <div v-else class="list">
       <div
-        v-for="p in projects"
+        v-for="p in visibleProjects"
         :key="p.id"
         class="project-row"
         role="button"
@@ -113,6 +136,9 @@ function createProject() {
         </div>
 
         <div class="pc-side">
+          <button class="ghost star" :class="{ on: p.favorite }" title="收藏置顶" @click.stop="toggleFavorite(p)">
+            {{ p.favorite ? '★' : '☆' }}
+          </button>
           <button class="ghost" @click.stop="open(p.rootDir)">打开目录</button>
           <button class="ghost" @click.stop="emit('edit', p.id)">编辑</button>
           <button
