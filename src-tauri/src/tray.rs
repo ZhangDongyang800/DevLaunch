@@ -79,6 +79,8 @@ fn handle_menu(app: &AppHandle, id: String) {
                 eprintln!("launch failed: {e}");
                 show_main_window(&app);
                 let _ = app.emit("launch-error", e);
+            } else {
+                commands::record_launch(&app, &project_id);
             }
         });
     }

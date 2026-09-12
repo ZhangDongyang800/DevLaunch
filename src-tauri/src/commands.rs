@@ -8,8 +8,9 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 #[cfg(test)]
 mod tests {
@@ -72,6 +73,7 @@ mod tests {
         let state = crate::AppState {
             config: std::sync::Mutex::new(initial.clone()),
             path,
+            hotkey: std::sync::Mutex::new(None),
         };
         let mut next = AppConfig::default();
         next.projects.push(sample_project("p1"));
@@ -197,6 +199,36 @@ mod tests {
         let cfg = AppConfig::default();
         assert!(scan_with_config(missing.to_str().unwrap(), &cfg).unwrap_err().contains("目录不存在"));
     }
+
+    #[test]
+    fn touch_last_launched_updates_known_project() {
+        let mut cfg = AppConfig::default();
+        cfg.projects.push(sample_project("p1"));
+        assert!(touch_last_launched(&mut cfg, "p1", 123));
+        assert_eq!(cfg.projects[0].last_launched_at, Some(123));
+    }
+
+    #[test]
+    fn touch_last_launched_ignores_unknown_project() {
+        let mut cfg = AppConfig::default();
+        cfg.projects.push(sample_project("p1"));
+        assert!(!touch_last_launched(&mut cfg, "nope", 123));
+        assert_eq!(cfg.projects[0].last_launched_at, None);
+    }
+
+    #[test]
+    fn detected_project_serializes_already_imported() {
+        let d = DetectedProject {
+            name: "App".into(),
+            root_dir: r"D:\App".into(),
+            already_imported: true,
+            ecosystems: vec![],
+            suggestions: vec![],
+        };
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains("\"alreadyImported\":true"), "{json}");
+        assert!(json.contains("\"rootDir\""), "{json}");
+    }
 }
 
 #[tauri::command]
@@ -221,6 +253,69 @@ fn apply_config(state: &AppState, config: AppConfig) -> Result<(), String> {
         *guard = previous;
         return Err(e);
     }
+    Ok(())
+}
+
+pub fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+/// 纯函数：命中项目则更新时间戳。
+pub fn touch_last_launched(cfg: &mut AppConfig, project_id: &str, ts: u64) -> bool {
+    match cfg.projects.iter_mut().find(|p| p.id == project_id) {
+        Some(p) => {
+            p.last_launched_at = Some(ts);
+            true
+        }
+        None => false,
+    }
+}
+
+/// 启动成功后 best-effort 记录；失败不影响启动。
+pub(crate) fn record_launch(app: &AppHandle, project_id: &str) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let mut guard = state.config.lock().unwrap();
+    if touch_last_launched(&mut guard, project_id, now_secs()) {
+        if let Err(e) = guard.save(&state.path) {
+            eprintln!("record launch failed: {e}");
+        }
+    }
+}
+
+#[tauri::command]
+pub fn hide_palette(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("palette") {
+        let _ = win.hide();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_hotkey(app: AppHandle, state: State<AppState>, hotkey: String) -> Result<(), String> {
+    let spec = hotkey.trim().to_string();
+    let new_shortcut = crate::hotkey::parse(&spec)?;
+    let old = state.hotkey.lock().unwrap().clone();
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    if let Err(e) = gs.register(new_shortcut) {
+        if let Some(old_spec) = old {
+            let _ = crate::hotkey::register(&app, &old_spec);
+        }
+        return Err(format!("快捷键注册失败（可能已被其他程序占用）：{e}"));
+    }
+    let mut guard = state.config.lock().unwrap();
+    let previous = guard.clone();
+    guard.settings.hotkey = spec.clone();
+    if let Err(e) = guard.save(&state.path) {
+        *guard = previous;
+        drop(guard);
+        if let Some(old_spec) = old {
+            let _ = crate::hotkey::register(&app, &old_spec);
+        }
+        return Err(e);
+    }
+    drop(guard);
+    *state.hotkey.lock().unwrap() = Some(spec);
     Ok(())
 }
 
@@ -258,13 +353,21 @@ fn backup_config_file(path: &Path) -> Option<PathBuf> {
 #[tauri::command]
 pub fn launch_project_cmd(app: AppHandle, state: State<AppState>, project_id: String) -> Result<(), String> {
     let cfg = state.config.lock().unwrap().clone();
-    launcher::launch_project(&app, &cfg, &project_id)
+    let result = launcher::launch_project(&app, &cfg, &project_id);
+    if result.is_ok() {
+        record_launch(&app, &project_id);
+    }
+    result
 }
 
 #[tauri::command]
 pub fn launch_item_cmd(app: AppHandle, state: State<AppState>, project_id: String, item_id: String) -> Result<(), String> {
     let cfg = state.config.lock().unwrap().clone();
-    launcher::launch_item(&app, &cfg, &project_id, &item_id)
+    let result = launcher::launch_item(&app, &cfg, &project_id, &item_id);
+    if result.is_ok() {
+        record_launch(&app, &project_id);
+    }
+    result
 }
 
 #[tauri::command]

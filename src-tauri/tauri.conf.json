@@ -20,6 +20,19 @@
         "center": true,
         "decorations": false,
         "visible": false
+      },
+      {
+        "label": "palette",
+        "title": "DevLaunch",
+        "url": "index.html#palette",
+        "width": 560,
+        "height": 340,
+        "center": true,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false
       }
     ],
     "security": {
