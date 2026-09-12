@@ -4,7 +4,7 @@ export type View =
   | { name: 'scan' }
   | { name: 'settings' }
 
-export type Shell = 'cmd' | 'powershell'
+export type Shell = 'cmd' | 'powershell' | 'bash'
 
 export interface Item {
   id: string

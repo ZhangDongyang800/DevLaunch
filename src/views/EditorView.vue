@@ -293,6 +293,7 @@ async function doImport() {
         <select v-model="it.shell" title="高级：命令方言（默认 CMD）">
           <option value="cmd">CMD</option>
           <option value="powershell">PowerShell</option>
+          <option value="bash">Git Bash</option>
         </select>
         <button class="accent" :disabled="runningItemId !== ''" @click="tryRunItem(it)">▶ 运行此项</button>
         <button class="danger ghost" @click="removeItem(ii)">✕</button>
