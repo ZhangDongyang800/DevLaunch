@@ -84,7 +84,11 @@ async function tryRunItem(it: Item) {
     await launchItem(project.value.id, it.id)
     emit('notify', `已启动「${it.name || '启动项'}」`)
     getConfig()
-      .then((c) => (config.value = c))
+      .then((c) => {
+        const wasDirty = dirty.value
+        config.value = c
+        if (!wasDirty) savedSnapshot.value = JSON.stringify(project.value)
+      })
       .catch(() => {})
   } catch (e) {
     emit('notify', `${e}`, 'err')
