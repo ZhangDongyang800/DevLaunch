@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { gitCommit } from '../api'
 import type { CommitDetail } from '../types'
 import { loadLog, logCache, statuses } from '../gitStore'
+import GitGraph from './GitGraph.vue'
 
 const props = defineProps<{ projectId: string }>()
 
@@ -94,20 +95,23 @@ function relTime(iso: string): string {
 
       <div class="git-col git-commits">
         <div class="gc-head">提交</div>
-        <div class="gc-body" @scroll="onScroll">
-          <div
-            v-for="r in rows"
-            :key="r.commit.hash"
-            class="gt-commit"
-            :class="{ active: selected === r.commit.hash }"
-            @click="select(r.commit.hash)"
-          >
-            <span class="gt-hash mono">{{ r.commit.short }}</span>
-            <span class="gt-subject">{{ r.commit.subject }}</span>
-            <span class="gt-author">{{ r.commit.author }}</span>
-            <span class="gt-time">{{ relTime(r.commit.date) }}</span>
+        <div class="gc-body git-log-scroll" @scroll="onScroll">
+          <GitGraph :rows="rows" :selected="selected" />
+          <div class="git-log-list">
+            <div
+              v-for="r in rows"
+              :key="r.commit.hash"
+              class="gt-commit"
+              :class="{ active: selected === r.commit.hash }"
+              @click="select(r.commit.hash)"
+            >
+              <span class="gt-hash mono">{{ r.commit.short }}</span>
+              <span class="gt-subject">{{ r.commit.subject }}</span>
+              <span class="gt-author">{{ r.commit.author }}</span>
+              <span class="gt-time">{{ relTime(r.commit.date) }}</span>
+            </div>
+            <div v-if="rows.length === 0" class="gc-empty">还没有提交</div>
           </div>
-          <div v-if="rows.length === 0" class="gc-empty">还没有提交</div>
         </div>
       </div>
 

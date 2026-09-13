@@ -925,3 +925,8 @@ button.star.on { color: var(--signal); }
 @media (max-width: 780px) {
   .git-columns { flex-direction: column; }
 }
+
+.git-log-scroll { display: flex; align-items: flex-start; }
+.git-graph { flex-shrink: 0; }
+.git-log-list { flex: 1; min-width: 0; }
+.git-log-list .gt-commit { height: 22px; align-items: center; }
