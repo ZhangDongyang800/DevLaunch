@@ -70,7 +70,7 @@ Of course, it cannot fix bugs or other development problems for you. It only wor
 
 - **Favorites and recents**: pin frequently used projects; launched projects are ordered by recency.
 
-- **Read-only Git overview**: each project shows branch / dirty / ahead-behind, with an inline panel for the working tree, commit history, diffs, and a branch/merge graph — across all your projects, locally, with no write operations.
+- **Read-only Git page**: a top-level page lists every project with branch / dirty / ahead-behind; select one to see its working tree, commit history with a branch/merge graph, and diffs. Project rows keep a small status chip that jumps here. Local only, with no write operations.
 
 ## Quick Start
 
