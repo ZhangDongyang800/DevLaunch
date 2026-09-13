@@ -451,6 +451,45 @@ pub fn git_log(dir: &Path, limit: u32, skip: u32) -> Result<Vec<Commit>, String>
     log_result(text)
 }
 
+const MAX_PATCH_BYTES: usize = 256 * 1024;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitDetail {
+    pub hash: String,
+    pub stat: String,
+    pub patch: String,
+    pub truncated: bool,
+}
+
+pub fn validate_hash(hash: &str) -> Result<(), String> {
+    let ok = (4..=40).contains(&hash.len()) && hash.chars().all(|c| c.is_ascii_hexdigit());
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("无效的提交哈希：{hash}"))
+    }
+}
+
+pub fn truncate_patch(patch: String) -> (String, bool) {
+    if patch.len() <= MAX_PATCH_BYTES {
+        return (patch, false);
+    }
+    let mut end = MAX_PATCH_BYTES;
+    while end > 0 && !patch.is_char_boundary(end) {
+        end -= 1;
+    }
+    (patch[..end].to_string(), true)
+}
+
+pub fn git_commit(dir: &Path, hash: &str) -> Result<CommitDetail, String> {
+    validate_hash(hash)?;
+    let stat = run_git(dir, &["show", "--stat", "--format=%H", hash, "--"])?;
+    let patch = run_git(dir, &["show", "--format=", "--patch", hash, "--"])?;
+    let (patch, truncated) = truncate_patch(patch);
+    Ok(CommitDetail { hash: hash.to_string(), stat, patch, truncated })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,5 +693,25 @@ mod tests {
         let rows = assign_lanes(&commits);
         assert_eq!(rows[0].lane, 0);
         assert!(rows[0].passes.is_empty());
+    }
+
+    #[test]
+    fn validate_hash_accepts_hex_and_rejects_options() {
+        assert!(validate_hash("abc123").is_ok());
+        assert!(validate_hash(&"a".repeat(40)).is_ok());
+        assert!(validate_hash("--all").is_err());
+        assert!(validate_hash("abc").is_err());
+        assert!(validate_hash("gggg").is_err());
+    }
+
+    #[test]
+    fn truncate_patch_marks_and_respects_utf8() {
+        let small = "diff --git a b".to_string();
+        assert_eq!(truncate_patch(small.clone()), (small, false));
+        let big = "中".repeat(200_000); // >256KB bytes, multi-byte
+        let (out, truncated) = truncate_patch(big);
+        assert!(truncated);
+        assert!(out.len() <= 256 * 1024);
+        assert!(out.chars().all(|c| c == '中'));
     }
 }
