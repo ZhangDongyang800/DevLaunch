@@ -873,3 +873,21 @@ h1 {
 button.star { color: var(--faint); }
 button.star.on { color: var(--signal); }
 .hotkey-input { width: 150px; text-align: center; }
+
+/* ---------- home git overview ---------- */
+
+.git-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.gb-branch { color: var(--signal); }
+.gb-dirty { color: #e0b341; }
+.gb-ahead { color: var(--signal); }
+.gb-behind { color: #e0b341; }
+.gb-warn { color: var(--danger); }
+
+.git-global-error {
+  margin: 6px 0;
+  padding: 6px 10px;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}

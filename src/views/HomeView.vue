@@ -1,11 +1,24 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { config, persist } from '../store'
 import { newId, type Item, type Project } from '../types'
 import { getConfig, launchProject, openDir } from '../api'
 import { filterProjects, sortProjects } from '../utils'
+import GitBadge from '../components/GitBadge.vue'
+import GitPanel from '../components/GitPanel.vue'
+import { expandedId, gitError, refreshStatuses, statuses } from '../gitStore'
 
 const emit = defineEmits<{ edit: [projectId: string]; scan: []; notify: [msg: string, kind?: 'ok' | 'err'] }>()
+
+onMounted(() => refreshStatuses(config.value?.projects.map((p) => p.id) ?? []))
+
+function toggleGit(id: string) {
+  expandedId.value = expandedId.value === id ? '' : id
+}
+
+function refreshGit() {
+  refreshStatuses(config.value?.projects.map((p) => p.id) ?? [])
+}
 
 const projects = computed(() => config.value?.projects ?? [])
 const query = ref('')
@@ -93,8 +106,11 @@ function createProject() {
         <span class="home-count mono">{{ projects.length }} PROJECTS</span>
         <button class="bordered" @click="emit('scan')">扫描工作区</button>
         <button class="bordered" @click="createProject">+ 新建项目</button>
+        <button class="bordered" @click="refreshGit">刷新 Git</button>
       </span>
     </div>
+
+    <div v-if="gitError" class="git-global-error">{{ gitError }}</div>
 
     <div v-if="projects.length === 0" class="empty-state">
       <div class="empty-title">还没有项目</div>
@@ -109,47 +125,52 @@ function createProject() {
     </div>
 
     <div v-else class="list">
-      <div
-        v-for="p in visibleProjects"
-        :key="p.id"
-        class="project-row"
-        role="button"
-        tabindex="0"
-        title="点击启动"
-        @click="launch(p.id)"
-        @keydown.enter.self="launch(p.id)"
-      >
-        <button class="launch-btn" title="启动" :disabled="launchingId === p.id" @click.stop="launch(p.id)">▶</button>
+      <template v-for="p in visibleProjects" :key="p.id">
+        <div
+          class="project-row"
+          role="button"
+          tabindex="0"
+          title="点击启动"
+          @click="launch(p.id)"
+          @keydown.enter.self="launch(p.id)"
+        >
+          <button class="launch-btn" title="启动" :disabled="launchingId === p.id" @click.stop="launch(p.id)">▶</button>
 
-        <div class="pc-info">
-          <div class="pc-head">
-            <span class="pc-name">{{ p.name || '未命名项目' }}</span>
-            <span class="pc-path mono">{{ p.rootDir || '未设置根目录' }}</span>
+          <div class="pc-info">
+            <div class="pc-head">
+              <span class="pc-name">{{ p.name || '未命名项目' }}</span>
+              <span class="pc-path mono">{{ p.rootDir || '未设置根目录' }}</span>
+              <span class="spacer" />
+              <GitBadge :status="statuses[p.id]" />
+            </div>
+            <div class="pc-pipeline">
+              <template v-for="(it, i) in p.items" :key="it.id">
+                <span v-if="i > 0" class="pl-sep">·</span>
+                <span class="pl-cmd" :title="it.command">{{ itemLabel(it) }}</span>
+              </template>
+              <span v-if="p.items.length === 0" class="pl-empty">无启动项</span>
+            </div>
           </div>
-          <div class="pc-pipeline">
-            <template v-for="(it, i) in p.items" :key="it.id">
-              <span v-if="i > 0" class="pl-sep">·</span>
-              <span class="pl-cmd" :title="it.command">{{ itemLabel(it) }}</span>
-            </template>
-            <span v-if="p.items.length === 0" class="pl-empty">无启动项</span>
+
+          <div class="pc-side">
+            <button class="ghost" title="Git 概览" @click.stop="toggleGit(p.id)">⑂</button>
+            <button class="ghost star" :class="{ on: p.favorite }" title="收藏置顶" @click.stop="toggleFavorite(p)">
+              {{ p.favorite ? '★' : '☆' }}
+            </button>
+            <button class="ghost" @click.stop="open(p.rootDir)">打开目录</button>
+            <button class="ghost" @click.stop="emit('edit', p.id)">编辑</button>
+            <button
+              class="danger ghost"
+              :class="{ confirming: confirmDeleteId === p.id }"
+              @click.stop="removeProject(p.id)"
+            >
+              {{ confirmDeleteId === p.id ? '确认删除？' : '删除' }}
+            </button>
           </div>
         </div>
 
-        <div class="pc-side">
-          <button class="ghost star" :class="{ on: p.favorite }" title="收藏置顶" @click.stop="toggleFavorite(p)">
-            {{ p.favorite ? '★' : '☆' }}
-          </button>
-          <button class="ghost" @click.stop="open(p.rootDir)">打开目录</button>
-          <button class="ghost" @click.stop="emit('edit', p.id)">编辑</button>
-          <button
-            class="danger ghost"
-            :class="{ confirming: confirmDeleteId === p.id }"
-            @click.stop="removeProject(p.id)"
-          >
-            {{ confirmDeleteId === p.id ? '确认删除？' : '删除' }}
-          </button>
-        </div>
-      </div>
+        <GitPanel v-if="expandedId === p.id" :project-id="p.id" />
+      </template>
     </div>
   </div>
 </template>
