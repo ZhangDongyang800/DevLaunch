@@ -345,14 +345,22 @@ fn parse_commit_record(rec: &str) -> Option<Commit> {
 const LOG_FORMAT: &str =
     "--pretty=format:%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%D%x1e";
 
+fn log_result(result: Result<String, String>) -> Result<Vec<Commit>, String> {
+    match result {
+        Ok(text) => Ok(parse_log(&text)),
+        Err(e) if e.contains("does not have any commits yet") => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
+}
+
 pub fn git_log(dir: &Path, limit: u32, skip: u32) -> Result<Vec<Commit>, String> {
     let limit = limit.min(200).to_string();
     let skip = skip.to_string();
     let text = run_git(
         dir,
         &["log", "--date-order", "--max-count", limit.as_str(), "--skip", skip.as_str(), LOG_FORMAT],
-    )?;
-    Ok(parse_log(&text))
+    );
+    log_result(text)
 }
 
 #[cfg(test)]
@@ -504,5 +512,16 @@ mod tests {
         assert_eq!(commits[0].refs, vec!["HEAD -> main", "origin/main"]);
         assert!(commits[1].parents.is_empty());
         assert!(commits[1].refs.is_empty());
+    }
+
+    #[test]
+    fn git_log_unborn_head_is_empty_ok() {
+        let err = "fatal: your current branch 'main' does not have any commits yet".to_string();
+        assert!(log_result(Err(err)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn git_log_real_error_propagates() {
+        assert_eq!(log_result(Err("不是 git 仓库".to_string())).unwrap_err(), "不是 git 仓库");
     }
 }
