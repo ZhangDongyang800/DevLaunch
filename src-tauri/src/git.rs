@@ -304,6 +304,57 @@ pub fn repo_status(project_id: &str, dir: &Path) -> RepoStatus {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Commit {
+    pub hash: String,
+    pub short: String,
+    pub parents: Vec<String>,
+    pub author: String,
+    pub email: String,
+    pub date: String,
+    pub subject: String,
+    pub refs: Vec<String>,
+}
+
+pub fn parse_log(text: &str) -> Vec<Commit> {
+    text.split('\u{1e}')
+        .map(|rec| rec.trim_matches(|c| c == '\n' || c == '\r'))
+        .filter(|rec| !rec.is_empty())
+        .filter_map(parse_commit_record)
+        .collect()
+}
+
+fn parse_commit_record(rec: &str) -> Option<Commit> {
+    let f: Vec<&str> = rec.split('\u{1f}').collect();
+    if f.len() < 8 {
+        return None;
+    }
+    Some(Commit {
+        hash: f[0].to_string(),
+        short: f[1].to_string(),
+        parents: f[2].split_whitespace().map(str::to_string).collect(),
+        author: f[3].to_string(),
+        email: f[4].to_string(),
+        date: f[5].to_string(),
+        subject: f[6].to_string(),
+        refs: f[7].split(',').map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect(),
+    })
+}
+
+const LOG_FORMAT: &str =
+    "--pretty=format:%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%D%x1e";
+
+pub fn git_log(dir: &Path, limit: u32, skip: u32) -> Result<Vec<Commit>, String> {
+    let limit = limit.min(200).to_string();
+    let skip = skip.to_string();
+    let text = run_git(
+        dir,
+        &["log", "--date-order", "--max-count", limit.as_str(), "--skip", skip.as_str(), LOG_FORMAT],
+    )?;
+    Ok(parse_log(&text))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +486,23 @@ mod tests {
         let st = repo_status("p1", &missing);
         assert!(!st.is_repo);
         assert!(st.error.unwrap().contains("目录不存在"));
+    }
+
+    #[test]
+    fn parse_log_splits_records_and_parents() {
+        let us = '\u{1f}';
+        let rs = '\u{1e}';
+        let text = format!(
+            "H1{us}h1{us}P1 P2{us}Alice{us}a@x.com{us}2026-09-13T10:00:00+08:00{us}fix: 中文 主题{us}HEAD -> main, origin/main{rs}\n\
+             H2{us}h2{us}{us}Bob{us}b@x.com{us}2026-09-12T10:00:00+08:00{us}init{us}{rs}\n"
+        );
+        let commits = parse_log(&text);
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].hash, "H1");
+        assert_eq!(commits[0].parents, vec!["P1", "P2"]);
+        assert_eq!(commits[0].subject, "fix: 中文 主题");
+        assert_eq!(commits[0].refs, vec!["HEAD -> main", "origin/main"]);
+        assert!(commits[1].parents.is_empty());
+        assert!(commits[1].refs.is_empty());
     }
 }
