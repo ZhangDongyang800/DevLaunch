@@ -70,6 +70,8 @@ Of course, it cannot fix bugs or other development problems for you. It only wor
 
 - **Favorites and recents**: pin frequently used projects; launched projects are ordered by recency.
 
+- **Read-only Git overview**: each project shows branch / dirty / ahead-behind, with an inline panel for the working tree, commit history, diffs, and a branch/merge graph — across all your projects, locally, with no write operations.
+
 ## Quick Start
 
 **Install**: download the `.msi` or `-setup.exe` from [Releases](../../releases), or build from source:
