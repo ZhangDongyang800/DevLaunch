@@ -25,6 +25,17 @@ export async function refreshStatuses(projectIds: string[]): Promise<void> {
   }
 }
 
+export async function refreshStatus(projectId: string): Promise<void> {
+  try {
+    const list = await gitStatuses([projectId])
+    const next = { ...statuses.value }
+    for (const s of list) next[s.projectId] = s
+    statuses.value = next
+  } catch (e) {
+    gitError.value = `${e}`
+  }
+}
+
 export async function loadLog(projectId: string, reset: boolean): Promise<void> {
   const skip = reset ? 0 : logCache.value[projectId]?.length ?? 0
   const page = await gitLog(projectId, 100, skip)

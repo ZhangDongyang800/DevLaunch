@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { gitCommit } from '../api'
 import type { CommitDetail } from '../types'
-import { loadLog, logCache, statuses } from '../gitStore'
+import { loadLog, logCache, refreshStatus, statuses } from '../gitStore'
 import GitGraph from './GitGraph.vue'
 
 const props = defineProps<{ projectId: string }>()
@@ -18,7 +18,7 @@ let loadingMore = false
 let exhausted = false
 
 onMounted(async () => {
-  if (rows.value.length > 0) return
+  void refreshStatus(props.projectId)
   try {
     await loadLog(props.projectId, true)
   } catch (e) {

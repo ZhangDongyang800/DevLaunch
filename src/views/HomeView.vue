@@ -1,23 +1,41 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { config, persist } from '../store'
 import { newId, type Item, type Project } from '../types'
 import { getConfig, launchProject, openDir } from '../api'
 import { filterProjects, sortProjects } from '../utils'
 import GitBadge from '../components/GitBadge.vue'
 import GitPanel from '../components/GitPanel.vue'
-import { expandedId, gitError, refreshStatuses, statuses } from '../gitStore'
+import { expandedId, gitError, refreshStatus, refreshStatuses, statuses } from '../gitStore'
 
 const emit = defineEmits<{ edit: [projectId: string]; scan: []; notify: [msg: string, kind?: 'ok' | 'err'] }>()
 
-onMounted(() => refreshStatuses(config.value?.projects.map((p) => p.id) ?? []))
+const projectIds = () => config.value?.projects.map((p) => p.id) ?? []
+let focusTimer: number | undefined
 
-function toggleGit(id: string) {
-  expandedId.value = expandedId.value === id ? '' : id
+onMounted(() => {
+  refreshStatuses(projectIds())
+  window.addEventListener('focus', onWindowFocus)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('focus', onWindowFocus)
+  clearTimeout(focusTimer)
+})
+
+function onWindowFocus() {
+  clearTimeout(focusTimer)
+  focusTimer = window.setTimeout(() => refreshStatuses(projectIds()), 500)
 }
 
-function refreshGit() {
-  refreshStatuses(config.value?.projects.map((p) => p.id) ?? [])
+function toggleGit(id: string) {
+  const opening = expandedId.value !== id
+  expandedId.value = opening ? id : ''
+  if (opening) refreshStatus(id)
+}
+
+function refreshOne(id: string) {
+  refreshStatus(id)
 }
 
 const projects = computed(() => config.value?.projects ?? [])
@@ -73,6 +91,7 @@ async function launch(id: string) {
     getConfig()
       .then((c) => (config.value = c))
       .catch(() => {})
+    refreshStatuses(projectIds())
   } catch (e) {
     emit('notify', `启动失败：${e}`, 'err')
   } finally {
@@ -106,7 +125,6 @@ function createProject() {
         <span class="home-count mono">{{ projects.length }} PROJECTS</span>
         <button class="bordered" @click="emit('scan')">扫描工作区</button>
         <button class="bordered" @click="createProject">+ 新建项目</button>
-        <button class="bordered" @click="refreshGit">刷新 Git</button>
       </span>
     </div>
 
@@ -141,7 +159,12 @@ function createProject() {
               <span class="pc-name">{{ p.name || '未命名项目' }}</span>
               <span class="pc-path mono">{{ p.rootDir || '未设置根目录' }}</span>
               <span class="spacer" />
-              <GitBadge :status="statuses[p.id]" />
+              <GitBadge
+                :status="statuses[p.id]"
+                :expanded="expandedId === p.id"
+                @toggle="toggleGit(p.id)"
+                @refresh="refreshOne(p.id)"
+              />
             </div>
             <div class="pc-pipeline">
               <template v-for="(it, i) in p.items" :key="it.id">
@@ -153,7 +176,6 @@ function createProject() {
           </div>
 
           <div class="pc-side">
-            <button class="ghost" title="Git 概览" @click.stop="toggleGit(p.id)">⑂</button>
             <button class="ghost star" :class="{ on: p.favorite }" title="收藏置顶" @click.stop="toggleFavorite(p)">
               {{ p.favorite ? '★' : '☆' }}
             </button>
