@@ -1,3 +1,4 @@
+use serde::Serialize;
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -141,6 +142,151 @@ pub fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
     run_git_with(&program, dir, args)
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChange {
+    pub path: String,
+    pub index: char,
+    pub worktree: char,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoStatus {
+    pub project_id: String,
+    pub is_repo: bool,
+    pub branch: Option<String>,
+    pub detached: bool,
+    pub ahead: u32,
+    pub behind: u32,
+    pub staged: u32,
+    pub unstaged: u32,
+    pub untracked: u32,
+    pub files: Vec<FileChange>,
+    pub error: Option<String>,
+}
+
+impl RepoStatus {
+    pub fn not_repo(project_id: &str) -> Self {
+        Self {
+            project_id: project_id.into(),
+            is_repo: false,
+            branch: None,
+            detached: false,
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            files: Vec::new(),
+            error: None,
+        }
+    }
+
+    pub fn errored(project_id: &str, message: String) -> Self {
+        let mut s = Self::not_repo(project_id);
+        s.error = Some(message);
+        s
+    }
+}
+
+pub fn status_label(index: char, worktree: char) -> String {
+    match (index, worktree) {
+        ('?', _) => "未跟踪",
+        ('!', _) => "忽略",
+        ('U', _) | (_, 'U') => "冲突",
+        ('D', _) | (_, 'D') => "删除",
+        ('A', _) => "新增",
+        ('R', _) => "重命名",
+        ('C', _) => "复制",
+        ('M', _) | (_, 'M') => "修改",
+        _ => "变更",
+    }
+    .to_string()
+}
+
+pub fn parse_status(project_id: &str, text: &str) -> RepoStatus {
+    let mut st = RepoStatus::not_repo(project_id);
+    st.is_repo = true;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("# branch.head ") {
+            let rest = rest.trim();
+            if rest == "(detached)" {
+                st.detached = true;
+                st.branch = None;
+            } else {
+                st.branch = Some(rest.to_string());
+            }
+        } else if let Some(rest) = line.strip_prefix("# branch.ab ") {
+            let mut it = rest.split_whitespace();
+            let a = it.next().unwrap_or("+0").trim_start_matches('+');
+            let b = it.next().unwrap_or("-0").trim_start_matches('-');
+            st.ahead = a.parse().unwrap_or(0);
+            st.behind = b.parse().unwrap_or(0);
+        } else if let Some(rest) = line.strip_prefix("? ") {
+            st.untracked += 1;
+            st.files.push(FileChange {
+                path: rest.to_string(),
+                index: '?',
+                worktree: '?',
+                status: "未跟踪".into(),
+            });
+        } else if let Some(rest) = line.strip_prefix("! ") {
+            st.files.push(FileChange {
+                path: rest.to_string(),
+                index: '!',
+                worktree: '!',
+                status: "忽略".into(),
+            });
+        } else if line.starts_with("1 ") || line.starts_with("2 ") || line.starts_with("u ") {
+            let kind = line.as_bytes()[0] as char;
+            let fields = if kind == 'u' {
+                line.splitn(11, ' ').collect::<Vec<_>>()
+            } else {
+                line.splitn(10, ' ').collect::<Vec<_>>()
+            };
+            if fields.len() < 2 {
+                continue;
+            }
+            let xy: Vec<char> = fields[1].chars().collect();
+            if xy.len() < 2 {
+                continue;
+            }
+            let (index, worktree) = (xy[0], xy[1]);
+            let raw_path = if kind == '2' {
+                fields
+                    .last()
+                    .copied()
+                    .unwrap_or("")
+                    .split('\t')
+                    .next()
+                    .unwrap_or("")
+            } else {
+                fields.last().copied().unwrap_or("")
+            };
+            if kind == 'u' {
+                st.staged += 1;
+                st.unstaged += 1;
+            } else {
+                if index != '.' && index != '?' && index != '!' {
+                    st.staged += 1;
+                }
+                if worktree != '.' && worktree != '?' && worktree != '!' {
+                    st.unstaged += 1;
+                }
+            }
+            st.files.push(FileChange {
+                path: raw_path.to_string(),
+                index,
+                worktree,
+                status: status_label(index, worktree),
+            });
+        }
+    }
+    st
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,5 +338,48 @@ mod tests {
     fn friendly_error_falls_back_to_last_line() {
         let err = friendly_git_error("warning: x\nfatal: bad revision 'abc'");
         assert_eq!(err, "fatal: bad revision 'abc'");
+    }
+
+    #[test]
+    fn parse_status_branch_and_counts() {
+        let text = "\
+# branch.oid 1111111111111111111111111111111111111111
+# branch.head main
+# branch.upstream origin/main
+# branch.ab +2 -1
+1 .M N... 100644 100644 100644 aaaaaaa bbbbbbb src/app.ts
+1 M. N... 100644 100644 100644 aaaaaaa bbbbbbb README.md
+? notes.txt
+! build/out.exe
+";
+        let st = parse_status("p1", text);
+        assert!(st.is_repo);
+        assert_eq!(st.branch.as_deref(), Some("main"));
+        assert!(!st.detached);
+        assert_eq!((st.ahead, st.behind), (2, 1));
+        assert_eq!(st.staged, 1);
+        assert_eq!(st.unstaged, 1);
+        assert_eq!(st.untracked, 1);
+        assert_eq!(st.files.len(), 4);
+        assert_eq!(st.files[0].path, "src/app.ts");
+        assert_eq!(st.files[0].status, "修改");
+        assert_eq!(st.files[3].status, "忽略");
+    }
+
+    #[test]
+    fn parse_status_detached() {
+        let text = "# branch.head (detached)\n# branch.oid abc\n";
+        let st = parse_status("p1", text);
+        assert!(st.detached);
+        assert_eq!(st.branch, None);
+        assert_eq!((st.ahead, st.behind), (0, 0));
+    }
+
+    #[test]
+    fn parse_status_rename_uses_new_path() {
+        let text = "2 R. N... 100644 100644 100644 aaaaaaa bbbbbbb R100 new name.ts\told name.ts\n";
+        let st = parse_status("p1", text);
+        assert_eq!(st.files[0].path, "new name.ts");
+        assert_eq!(st.files[0].status, "重命名");
     }
 }
