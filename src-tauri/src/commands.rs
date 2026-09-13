@@ -563,9 +563,9 @@ pub fn project_dir(cfg: &AppConfig, project_id: &str) -> Result<PathBuf, String>
 #[tauri::command(async)]
 pub fn git_statuses(state: State<'_, AppState>, project_ids: Vec<String>) -> Vec<git::RepoStatus> {
     let cfg = state.config.lock().unwrap().clone();
-    let targets: Vec<(String, PathBuf)> = project_ids
+    let targets: Vec<(String, Result<PathBuf, String>)> = project_ids
         .iter()
-        .map(|id| (id.clone(), project_dir(&cfg, id).unwrap_or_default()))
+        .map(|id| (id.clone(), project_dir(&cfg, id)))
         .collect();
 
     let n = targets.len();
@@ -581,10 +581,9 @@ pub fn git_statuses(state: State<'_, AppState>, project_ids: Vec<String>) -> Vec
                     break;
                 }
                 let (id, dir) = &targets[i];
-                let st = if dir.as_os_str().is_empty() {
-                    git::RepoStatus::errored(id, "项目未设置根目录".into())
-                } else {
-                    git::repo_status(id, dir)
+                let st = match dir {
+                    Ok(dir) => git::repo_status(id, dir),
+                    Err(e) => git::RepoStatus::errored(id, e.clone()),
                 };
                 let mut guard = results.lock().unwrap();
                 guard[i] = Some(st);

@@ -17,5 +17,5 @@ const dirty = computed(() => {
     <span v-if="status.ahead" class="gb-ahead">↑{{ status.ahead }}</span>
     <span v-if="status.behind" class="gb-behind">↓{{ status.behind }}</span>
   </span>
-  <span v-else-if="status && status.error" class="gb-warn" :title="status.error">!</span>
+  <span v-else-if="status && status.error" class="gb-warn" :title="status.error">—</span>
 </template>

@@ -13,6 +13,7 @@ const selected = ref('')
 const detail = ref<CommitDetail | null>(null)
 const error = ref('')
 const loadingDetail = ref(false)
+let detailSeq = 0
 let loadingMore = false
 let exhausted = false
 
@@ -43,16 +44,20 @@ async function onScroll(e: Event) {
 }
 
 async function select(hash: string) {
+  const seq = ++detailSeq
   selected.value = hash
   loadingDetail.value = true
   error.value = ''
   detail.value = null
   try {
-    detail.value = await gitCommit(props.projectId, hash)
+    const d = await gitCommit(props.projectId, hash)
+    if (seq !== detailSeq) return
+    detail.value = d
   } catch (e) {
+    if (seq !== detailSeq) return
     error.value = `${e}`
   } finally {
-    loadingDetail.value = false
+    if (seq === detailSeq) loadingDetail.value = false
   }
 }
 
@@ -89,7 +94,8 @@ function relTime(iso: string): string {
             <span class="gt-path mono">{{ f.path }}</span>
             <span class="gt-label">{{ f.status }}</span>
           </div>
-          <div v-if="(status?.files.length ?? 0) === 0" class="gc-empty">工作树干净</div>
+          <div v-if="status?.isRepo && (status?.files.length ?? 0) === 0" class="gc-empty">工作树干净</div>
+          <div v-else-if="!status?.isRepo" class="gc-empty">—</div>
         </div>
       </div>
 

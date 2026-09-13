@@ -3,6 +3,8 @@ use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
@@ -93,9 +95,18 @@ pub(crate) fn run_git_with(program: &Path, dir: &Path, args: &[&str]) -> Result<
     let mut child = cmd.spawn().map_err(|e| format!("启动 git 失败：{e}"))?;
     let mut out_pipe = child.stdout.take().expect("piped stdout");
     let mut err_pipe = child.stderr.take().expect("piped stderr");
+    let capped = Arc::new(AtomicBool::new(false));
+    let capped_out = Arc::clone(&capped);
     let out_handle = std::thread::spawn(move || {
         let mut buf = Vec::new();
-        let _ = out_pipe.by_ref().take(MAX_OUTPUT_BYTES).read_to_end(&mut buf);
+        // Read one byte past the cap so we can tell truncation from a clean EOF.
+        let _ = out_pipe
+            .by_ref()
+            .take(MAX_OUTPUT_BYTES + 1)
+            .read_to_end(&mut buf);
+        if buf.len() as u64 > MAX_OUTPUT_BYTES {
+            capped_out.store(true, Ordering::SeqCst);
+        }
         buf
     });
     let err_handle = std::thread::spawn(move || {
@@ -105,33 +116,62 @@ pub(crate) fn run_git_with(program: &Path, dir: &Path, args: &[&str]) -> Result<
     });
 
     let start = Instant::now();
-    let finished = loop {
+    let mut exit_ok = false;
+    let mut timed_out = false;
+    loop {
+        if capped.load(Ordering::SeqCst) {
+            // Output cap hit: kill early instead of waiting for the timeout.
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
         match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
+            Ok(Some(status)) => {
+                exit_ok = status.success();
+                break;
+            }
             Ok(None) => {
                 if start.elapsed() >= GIT_TIMEOUT {
                     let _ = child.kill();
                     let _ = child.wait();
-                    break None;
+                    timed_out = true;
+                    break;
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                break None;
+                timed_out = true;
+                break;
             }
         }
-    };
+    }
 
     let out = out_handle.join().unwrap_or_default();
     let err = err_handle.join().unwrap_or_default();
     let stderr = String::from_utf8_lossy(&err).into_owned();
+    capped_result(out, capped.load(Ordering::SeqCst), exit_ok, timed_out, &stderr)
+}
 
-    match finished {
-        Some(status) if status.success() => Ok(String::from_utf8_lossy(&out).into_owned()),
-        Some(_) => Err(friendly_git_error(&stderr)),
-        None => Err("git 执行超时".into()),
+fn capped_result(
+    out: Vec<u8>,
+    capped: bool,
+    exit_ok: bool,
+    timed_out: bool,
+    stderr: &str,
+) -> Result<String, String> {
+    if capped {
+        let end = (MAX_OUTPUT_BYTES as usize).min(out.len());
+        return Ok(String::from_utf8_lossy(&out[..end]).into_owned());
+    }
+    if timed_out {
+        return Err("git 执行超时".into());
+    }
+    if exit_ok {
+        Ok(String::from_utf8_lossy(&out).into_owned())
+    } else {
+        Err(friendly_git_error(stderr))
     }
 }
 
@@ -297,9 +337,12 @@ pub fn repo_status(project_id: &str, dir: &Path) -> RepoStatus {
     if !dir.is_dir() {
         return RepoStatus::errored(project_id, format!("目录不存在：{}", dir.display()));
     }
+    // Locale-independent work-tree check; erroring here means "not a repo".
+    if run_git(dir, &["rev-parse", "--is-inside-work-tree"]).is_err() {
+        return RepoStatus::not_repo(project_id);
+    }
     match run_git(dir, &["--no-optional-locks", "status", "--porcelain=v2", "--branch"]) {
         Ok(text) => parse_status(project_id, &text),
-        Err(e) if e == "不是 git 仓库" => RepoStatus::not_repo(project_id),
         Err(e) => RepoStatus::errored(project_id, e),
     }
 }
@@ -433,10 +476,15 @@ fn parse_commit_record(rec: &str) -> Option<Commit> {
 const LOG_FORMAT: &str =
     "--pretty=format:%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%D%x1e";
 
-fn log_result(result: Result<String, String>) -> Result<Vec<Commit>, String> {
+fn log_result(
+    result: Result<String, String>,
+    in_work_tree: bool,
+    head_exists: bool,
+) -> Result<Vec<Commit>, String> {
     match result {
         Ok(text) => Ok(parse_log(&text)),
-        Err(e) if e.contains("does not have any commits yet") => Ok(Vec::new()),
+        // Unborn HEAD: inside a work tree, but HEAD points nowhere yet.
+        Err(_) if in_work_tree && !head_exists => Ok(Vec::new()),
         Err(e) => Err(e),
     }
 }
@@ -448,7 +496,15 @@ pub fn git_log(dir: &Path, limit: u32, skip: u32) -> Result<Vec<Commit>, String>
         dir,
         &["log", "--date-order", "--max-count", limit.as_str(), "--skip", skip.as_str(), LOG_FORMAT],
     );
-    log_result(text)
+    match text {
+        Ok(text) => Ok(parse_log(&text)),
+        Err(e) => {
+            let in_work_tree = run_git(dir, &["rev-parse", "--is-inside-work-tree"]).is_ok();
+            let head_exists = in_work_tree
+                && run_git(dir, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok();
+            log_result(Err(e), in_work_tree, head_exists)
+        }
+    }
 }
 
 const MAX_PATCH_BYTES: usize = 256 * 1024;
@@ -643,13 +699,76 @@ mod tests {
 
     #[test]
     fn git_log_unborn_head_is_empty_ok() {
-        let err = "fatal: your current branch 'main' does not have any commits yet".to_string();
-        assert!(log_result(Err(err)).unwrap().is_empty());
+        assert!(log_result(Err("fatal: bad default revision 'HEAD'".into()), true, false)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
     fn git_log_real_error_propagates() {
-        assert_eq!(log_result(Err("不是 git 仓库".to_string())).unwrap_err(), "不是 git 仓库");
+        assert_eq!(
+            log_result(Err("不是 git 仓库".to_string()), false, false).unwrap_err(),
+            "不是 git 仓库"
+        );
+        assert_eq!(log_result(Err("fatal: bad revision".to_string()), true, true).unwrap_err(), "fatal: bad revision");
+    }
+
+    #[test]
+    fn capped_result_truncates_instead_of_erroring() {
+        let mut buf = vec![b'a'; (MAX_OUTPUT_BYTES + 1) as usize];
+        buf[..3].copy_from_slice(b"abc");
+        let got = capped_result(buf, true, false, false, "fatal: broken pipe").unwrap();
+        assert_eq!(got.len(), MAX_OUTPUT_BYTES as usize);
+        assert!(got.starts_with("abc"));
+    }
+
+    #[test]
+    fn capped_result_passes_through_success_timeout_and_error() {
+        assert_eq!(capped_result(b"ok".to_vec(), false, true, false, "").unwrap(), "ok");
+        assert_eq!(capped_result(Vec::new(), false, false, true, "").unwrap_err(), "git 执行超时");
+        assert_eq!(
+            capped_result(Vec::new(), false, false, false, "fatal: boom").unwrap_err(),
+            "fatal: boom"
+        );
+    }
+
+    #[test]
+    fn repo_status_and_log_against_real_repo() {
+        let program = match resolve_git_path() {
+            Some(p) => p,
+            None => return,
+        };
+
+        // Non-repo dir: not a repo, no error.
+        let plain = tempfile::tempdir().unwrap();
+        let st = repo_status("p", plain.path());
+        assert!(!st.is_repo);
+        assert!(st.error.is_none());
+
+        // Fresh repo start (empty/unborn HEAD).
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new(&program)
+                .current_dir(repo.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-q"]);
+        assert!(git_log(repo.path(), 100, 0).unwrap().is_empty());
+        assert!(repo_status("p", repo.path()).is_repo);
+
+        // A real commit → is_repo with a branch and one log entry.
+        git(&["config", "user.email", "devlaunch@example.com"]);
+        git(&["config", "user.name", "DevLaunch Test"]);
+        std::fs::write(repo.path().join("a.txt"), "hello").unwrap();
+        git(&["add", "a.txt"]);
+        git(&["commit", "-q", "-m", "init"]);
+        let st = repo_status("p", repo.path());
+        assert!(st.is_repo);
+        assert!(st.branch.is_some());
+        assert_eq!(git_log(repo.path(), 100, 0).unwrap().len(), 1);
     }
 
     fn commit(hash: &str, parents: &[&str]) -> Commit {
