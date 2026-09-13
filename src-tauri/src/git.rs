@@ -293,6 +293,17 @@ pub fn parse_status(project_id: &str, text: &str) -> RepoStatus {
     st
 }
 
+pub fn repo_status(project_id: &str, dir: &Path) -> RepoStatus {
+    if !dir.is_dir() {
+        return RepoStatus::errored(project_id, format!("目录不存在：{}", dir.display()));
+    }
+    match run_git(dir, &["--no-optional-locks", "status", "--porcelain=v2", "--branch"]) {
+        Ok(text) => parse_status(project_id, &text),
+        Err(e) if e == "不是 git 仓库" => RepoStatus::not_repo(project_id),
+        Err(e) => RepoStatus::errored(project_id, e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,5 +426,14 @@ mod tests {
         assert_eq!(st.files[0].status, "冲突");
         assert_eq!(st.staged, 1);
         assert_eq!(st.unstaged, 1);
+    }
+
+    #[test]
+    fn repo_status_missing_dir_reports_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope");
+        let st = repo_status("p1", &missing);
+        assert!(!st.is_repo);
+        assert!(st.error.unwrap().contains("目录不存在"));
     }
 }
