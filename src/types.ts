@@ -61,6 +61,59 @@ export interface DetectedProject {
   suggestions: Suggestion[]
 }
 
+export interface FileChange {
+  path: string
+  index: string
+  worktree: string
+  status: string
+}
+
+export interface RepoStatus {
+  projectId: string
+  isRepo: boolean
+  branch: string | null
+  detached: boolean
+  ahead: number
+  behind: number
+  staged: number
+  unstaged: number
+  untracked: number
+  files: FileChange[]
+  error: string | null
+}
+
+export interface Commit {
+  hash: string
+  short: string
+  parents: string[]
+  author: string
+  email: string
+  date: string
+  subject: string
+  refs: string[]
+}
+
+export interface GraphEdge {
+  fromLane: number
+  toLane: number
+  parentHash: string
+}
+
+export interface GraphRow {
+  commit: Commit
+  lane: number
+  color: number
+  passes: number[]
+  edges: GraphEdge[]
+}
+
+export interface CommitDetail {
+  hash: string
+  stat: string
+  patch: string
+  truncated: boolean
+}
+
 export type ToastKind = 'ok' | 'err'
 
 export function newId(): string {

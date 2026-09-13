@@ -1,5 +1,6 @@
 use crate::config::{AppConfig, ProjectTemplate};
 use crate::detect;
+use crate::git;
 use crate::launcher;
 use crate::tray;
 use crate::AppState;
@@ -214,6 +215,24 @@ mod tests {
         cfg.projects.push(sample_project("p1"));
         assert!(!touch_last_launched(&mut cfg, "nope", 123));
         assert_eq!(cfg.projects[0].last_launched_at, None);
+    }
+
+    #[test]
+    fn project_dir_rejects_unknown_or_empty_root() {
+        let cfg = AppConfig::default();
+        assert!(project_dir(&cfg, "missing").is_err());
+        let mut cfg2 = AppConfig::default();
+        let mut p = sample_project("p1");
+        p.root_dir = "  ".into();
+        cfg2.projects.push(p);
+        assert!(project_dir(&cfg2, "p1").is_err());
+    }
+
+    #[test]
+    fn project_dir_returns_root() {
+        let mut cfg = AppConfig::default();
+        cfg.projects.push(sample_project("p1"));
+        assert_eq!(project_dir(&cfg, "p1").unwrap(), PathBuf::from(r"D:\Projects\PVDS"));
     }
 
     #[test]
@@ -527,6 +546,76 @@ pub fn scan_with_config(path: &str, cfg: &AppConfig) -> Result<Vec<DetectedProje
             suggestions: repo.suggestions,
         })
         .collect())
+}
+
+pub fn project_dir(cfg: &AppConfig, project_id: &str) -> Result<PathBuf, String> {
+    let p = cfg
+        .projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("项目不存在：{project_id}"))?;
+    if p.root_dir.trim().is_empty() {
+        return Err("项目未设置根目录".into());
+    }
+    Ok(PathBuf::from(&p.root_dir))
+}
+
+#[tauri::command(async)]
+pub fn git_statuses(state: State<'_, AppState>, project_ids: Vec<String>) -> Vec<git::RepoStatus> {
+    let cfg = state.config.lock().unwrap().clone();
+    let targets: Vec<(String, PathBuf)> = project_ids
+        .iter()
+        .map(|id| (id.clone(), project_dir(&cfg, id).unwrap_or_default()))
+        .collect();
+
+    let n = targets.len();
+    let results: std::sync::Mutex<Vec<Option<git::RepoStatus>>> =
+        std::sync::Mutex::new((0..n).map(|_| None).collect());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let workers = 4usize.min(n.max(1));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if i >= n {
+                    break;
+                }
+                let (id, dir) = &targets[i];
+                let st = if dir.as_os_str().is_empty() {
+                    git::RepoStatus::errored(id, "项目未设置根目录".into())
+                } else {
+                    git::repo_status(id, dir)
+                };
+                let mut guard = results.lock().unwrap();
+                guard[i] = Some(st);
+            });
+        }
+    });
+    results.into_inner().unwrap().into_iter().flatten().collect()
+}
+
+#[tauri::command(async)]
+pub fn git_log(
+    state: State<'_, AppState>,
+    project_id: String,
+    limit: Option<u32>,
+    skip: Option<u32>,
+) -> Result<Vec<git::GraphRow>, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    let commits = git::git_log(&dir, limit.unwrap_or(100), skip.unwrap_or(0))?;
+    Ok(git::assign_lanes(&commits))
+}
+
+#[tauri::command(async)]
+pub fn git_commit(
+    state: State<'_, AppState>,
+    project_id: String,
+    hash: String,
+) -> Result<git::CommitDetail, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    git::git_commit(&dir, &hash)
 }
 
 /// Windows 路径比较归一化：统一分隔符、去尾分隔符、不区分大小写。

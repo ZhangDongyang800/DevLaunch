@@ -1,5 +1,13 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { AppConfig, DetectResult, DetectedProject, ProjectTemplate } from './types'
+import type {
+  AppConfig,
+  CommitDetail,
+  DetectResult,
+  DetectedProject,
+  GraphRow,
+  ProjectTemplate,
+  RepoStatus,
+} from './types'
 
 export const getConfig = () => invoke<AppConfig>('get_config')
 export const saveConfig = (config: AppConfig) => invoke<void>('save_config', { config })
@@ -24,3 +32,10 @@ export const scanWorkspace = (path: string) => invoke<DetectedProject[]>('scan_w
 
 export const setHotkey = (hotkey: string) => invoke<void>('set_hotkey', { hotkey })
 export const hidePalette = () => invoke<void>('hide_palette')
+
+export const gitStatuses = (projectIds: string[]) =>
+  invoke<RepoStatus[]>('git_statuses', { projectIds })
+export const gitLog = (projectId: string, limit?: number, skip?: number) =>
+  invoke<GraphRow[]>('git_log', { projectId, limit, skip })
+export const gitCommit = (projectId: string, hash: string) =>
+  invoke<CommitDetail>('git_commit', { projectId, hash })

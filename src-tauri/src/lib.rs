@@ -123,6 +123,9 @@ pub fn run() {
             commands::scan_workspace,
             commands::set_hotkey,
             commands::hide_palette,
+            commands::git_statuses,
+            commands::git_log,
+            commands::git_commit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
