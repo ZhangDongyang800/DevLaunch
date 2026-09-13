@@ -1,42 +1,22 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { config, persist } from '../store'
 import { newId, type Item, type Project } from '../types'
 import { getConfig, launchProject, openDir } from '../api'
 import { filterProjects, sortProjects } from '../utils'
 import GitBadge from '../components/GitBadge.vue'
-import GitPanel from '../components/GitPanel.vue'
-import { expandedId, gitError, refreshStatus, refreshStatuses, statuses } from '../gitStore'
+import { gitError, refreshStatuses, statuses } from '../gitStore'
 
-const emit = defineEmits<{ edit: [projectId: string]; scan: []; notify: [msg: string, kind?: 'ok' | 'err'] }>()
+const emit = defineEmits<{
+  edit: [projectId: string]
+  scan: []
+  'git-open': [projectId: string]
+  notify: [msg: string, kind?: 'ok' | 'err']
+}>()
 
 const projectIds = () => config.value?.projects.map((p) => p.id) ?? []
-let focusTimer: number | undefined
 
-onMounted(() => {
-  refreshStatuses(projectIds())
-  window.addEventListener('focus', onWindowFocus)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('focus', onWindowFocus)
-  clearTimeout(focusTimer)
-})
-
-function onWindowFocus() {
-  clearTimeout(focusTimer)
-  focusTimer = window.setTimeout(() => refreshStatuses(projectIds()), 500)
-}
-
-function toggleGit(id: string) {
-  const opening = expandedId.value !== id
-  expandedId.value = opening ? id : ''
-  if (opening) refreshStatus(id)
-}
-
-function refreshOne(id: string) {
-  refreshStatus(id)
-}
+onMounted(() => refreshStatuses(projectIds()))
 
 const projects = computed(() => config.value?.projects ?? [])
 const query = ref('')
@@ -159,12 +139,7 @@ function createProject() {
               <span class="pc-name">{{ p.name || '未命名项目' }}</span>
               <span class="pc-path mono">{{ p.rootDir || '未设置根目录' }}</span>
               <span class="spacer" />
-              <GitBadge
-                :status="statuses[p.id]"
-                :expanded="expandedId === p.id"
-                @toggle="toggleGit(p.id)"
-                @refresh="refreshOne(p.id)"
-              />
+              <GitBadge :status="statuses[p.id]" @open="emit('git-open', p.id)" />
             </div>
             <div class="pc-pipeline">
               <template v-for="(it, i) in p.items" :key="it.id">
@@ -190,8 +165,6 @@ function createProject() {
             </button>
           </div>
         </div>
-
-        <GitPanel v-if="expandedId === p.id" :project-id="p.id" />
       </template>
     </div>
   </div>

@@ -2,9 +2,11 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import { load, config } from './store'
+import { refreshStatuses } from './gitStore'
 import type { View, ToastKind } from './types'
 import TitleBar from './components/TitleBar.vue'
 import HomeView from './views/HomeView.vue'
+import GitView from './views/GitView.vue'
 import ScanView from './views/ScanView.vue'
 import EditorView from './views/EditorView.vue'
 import SettingsView from './views/SettingsView.vue'
@@ -15,6 +17,7 @@ const toastKind = ref<ToastKind>('ok')
 const loadError = ref('')
 let toastTimer: number | undefined
 let unlisten: (() => void) | undefined
+let focusTimer: number | undefined
 
 function showToast(msg: string, kind: ToastKind = 'ok') {
   toast.value = msg
@@ -32,12 +35,24 @@ async function init() {
   }
 }
 
+function onWindowFocus() {
+  clearTimeout(focusTimer)
+  focusTimer = window.setTimeout(() => {
+    refreshStatuses(config.value?.projects.map((p) => p.id) ?? [])
+  }, 500)
+}
+
 onMounted(async () => {
   await init()
   unlisten = await listen<string>('launch-error', (e) => showToast(e.payload, 'err'))
+  window.addEventListener('focus', onWindowFocus)
 })
 
-onUnmounted(() => unlisten?.())
+onUnmounted(() => {
+  unlisten?.()
+  window.removeEventListener('focus', onWindowFocus)
+  clearTimeout(focusTimer)
+})
 </script>
 
 <template>
@@ -46,12 +61,22 @@ onUnmounted(() => unlisten?.())
       <button class="tb-nav-item" :class="{ active: view.name === 'home' }" @click="view = { name: 'home' }">
         项目
       </button>
+      <button class="tb-nav-item" :class="{ active: view.name === 'git' }" @click="view = { name: 'git' }">
+        Git
+      </button>
       <button class="tb-nav-item" :class="{ active: view.name === 'settings' }" @click="view = { name: 'settings' }">
         设置
       </button>
     </TitleBar>
     <main class="main">
-      <HomeView v-if="view.name === 'home'" @edit="view = { name: 'editor', projectId: $event }" @scan="view = { name: 'scan' }" @notify="showToast" />
+      <HomeView
+        v-if="view.name === 'home'"
+        @edit="view = { name: 'editor', projectId: $event }"
+        @scan="view = { name: 'scan' }"
+        @open-git="view = { name: 'git', projectId: $event }"
+        @notify="showToast"
+      />
+      <GitView v-else-if="view.name === 'git'" :project-id="view.projectId" />
       <ScanView v-else-if="view.name === 'scan'" @back="view = { name: 'home' }" @notify="showToast" />
       <EditorView v-else-if="view.name === 'editor'" :project-id="view.projectId" @back="view = { name: 'home' }" @notify="showToast" />
       <SettingsView v-else @notify="showToast" />

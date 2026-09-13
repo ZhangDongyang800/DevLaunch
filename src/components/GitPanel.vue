@@ -85,7 +85,7 @@ function relTime(iso: string): string {
       <span v-if="error" class="gp-error">{{ error }}</span>
     </div>
 
-    <div class="git-columns">
+    <div class="git-detail-grid">
       <div class="git-col git-worktree">
         <div class="gc-head">工作树 ({{ status?.files.length ?? 0 }})</div>
         <div class="gc-body">

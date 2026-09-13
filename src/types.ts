@@ -2,6 +2,7 @@ export type View =
   | { name: 'home' }
   | { name: 'editor'; projectId: string }
   | { name: 'scan' }
+  | { name: 'git'; projectId?: string }
   | { name: 'settings' }
 
 export type Shell = 'cmd' | 'powershell' | 'bash'

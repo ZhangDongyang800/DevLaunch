@@ -4,7 +4,6 @@ import { gitLog, gitStatuses } from './api'
 
 export const statuses = ref<Record<string, RepoStatus>>({})
 export const gitError = ref('')
-export const expandedId = ref('')
 export const logCache = ref<Record<string, GraphRow[]>>({})
 
 let refreshing = false
