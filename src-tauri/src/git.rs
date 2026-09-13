@@ -317,6 +317,94 @@ pub struct Commit {
     pub refs: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdge {
+    pub from_lane: u16,
+    pub to_lane: u16,
+    pub parent_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphRow {
+    pub commit: Commit,
+    pub lane: u16,
+    pub color: u8,
+    pub passes: Vec<u16>,
+    pub edges: Vec<GraphEdge>,
+}
+
+/// 输入 newest-first、含 parents 的提交列表，输出每行的泳道/贯穿线/跨道连线。
+pub fn assign_lanes(commits: &[Commit]) -> Vec<GraphRow> {
+    let mut lanes: Vec<Option<String>> = Vec::new();
+    let mut colors: Vec<u8> = Vec::new();
+    let mut next_color: u8 = 0;
+    let mut rows = Vec::with_capacity(commits.len());
+
+    let alloc = |lanes: &mut Vec<Option<String>>, colors: &mut Vec<u8>, next: &mut u8| -> usize {
+        match lanes.iter().position(|e| e.is_none()) {
+            Some(i) => i,
+            None => {
+                lanes.push(None);
+                colors.push(*next);
+                *next = next.wrapping_add(1);
+                lanes.len() - 1
+            }
+        }
+    };
+
+    for commit in commits {
+        let matches: Vec<usize> = lanes
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.as_deref() == Some(commit.hash.as_str()))
+            .map(|(i, _)| i)
+            .collect();
+        let lane = match matches.first() {
+            Some(&first) => {
+                for &m in matches.iter().skip(1) {
+                    lanes[m] = None;
+                }
+                first
+            }
+            None => alloc(&mut lanes, &mut colors, &mut next_color),
+        };
+        if lane >= colors.len() {
+            colors.push(next_color);
+            next_color = next_color.wrapping_add(1);
+        }
+
+        // first parent inherits this lane (vertical); extra parents branch out
+        lanes[lane] = commit.parents.first().cloned();
+        let mut edges = Vec::new();
+        for parent in commit.parents.iter().skip(1) {
+            let target = lanes
+                .iter()
+                .position(|e| e.as_deref() == Some(parent.as_str()))
+                .unwrap_or_else(|| alloc(&mut lanes, &mut colors, &mut next_color));
+            lanes[target] = Some(parent.clone());
+            edges.push(GraphEdge { from_lane: lane as u16, to_lane: target as u16, parent_hash: parent.clone() });
+        }
+
+        let passes = lanes
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.is_some())
+            .map(|(i, _)| i as u16)
+            .collect();
+
+        rows.push(GraphRow {
+            commit: commit.clone(),
+            lane: lane as u16,
+            color: colors.get(lane).copied().unwrap_or(0),
+            passes,
+            edges,
+        });
+    }
+    rows
+}
+
 pub fn parse_log(text: &str) -> Vec<Commit> {
     text.split('\u{1e}')
         .map(|rec| rec.trim_matches(|c| c == '\n' || c == '\r'))
@@ -523,5 +611,48 @@ mod tests {
     #[test]
     fn git_log_real_error_propagates() {
         assert_eq!(log_result(Err("不是 git 仓库".to_string())).unwrap_err(), "不是 git 仓库");
+    }
+
+    fn commit(hash: &str, parents: &[&str]) -> Commit {
+        Commit {
+            hash: hash.into(),
+            short: hash.into(),
+            parents: parents.iter().map(|s| s.to_string()).collect(),
+            author: "a".into(),
+            email: "a@x".into(),
+            date: "2026-09-13T00:00:00+08:00".into(),
+            subject: "s".into(),
+            refs: vec![],
+        }
+    }
+
+    #[test]
+    fn lanes_linear_history_single_lane() {
+        let commits = [commit("C", &["B"]), commit("B", &["A"]), commit("A", &[])];
+        let rows = assign_lanes(&commits);
+        assert!(rows.iter().all(|r| r.lane == 0));
+        assert_eq!(rows[0].passes, vec![0]); // below C the B lane continues
+        assert_eq!(rows[2].passes, Vec::<u16>::new());
+        assert!(rows.iter().all(|r| r.edges.is_empty()));
+    }
+
+    #[test]
+    fn lanes_merge_has_cross_edge() {
+        let commits = [commit("M", &["P1", "P2"]), commit("P1", &["A"]), commit("P2", &["A"]), commit("A", &[])];
+        let rows = assign_lanes(&commits);
+        assert_eq!(rows[0].lane, 0);
+        assert_eq!(rows[0].edges.len(), 1);
+        assert_ne!(rows[0].edges[0].from_lane, rows[0].edges[0].to_lane);
+        assert_eq!(rows[0].edges[0].parent_hash, "P2");
+        // both branch lanes are alive right after the merge
+        assert_eq!(rows[0].passes, vec![0, 1]);
+    }
+
+    #[test]
+    fn lanes_root_releases_lane() {
+        let commits = [commit("A", &[])];
+        let rows = assign_lanes(&commits);
+        assert_eq!(rows[0].lane, 0);
+        assert!(rows[0].passes.is_empty());
     }
 }
