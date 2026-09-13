@@ -241,11 +241,12 @@ pub fn parse_status(project_id: &str, text: &str) -> RepoStatus {
             });
         } else if line.starts_with("1 ") || line.starts_with("2 ") || line.starts_with("u ") {
             let kind = line.as_bytes()[0] as char;
-            let fields = if kind == 'u' {
-                line.splitn(11, ' ').collect::<Vec<_>>()
-            } else {
-                line.splitn(10, ' ').collect::<Vec<_>>()
+            let bound = match kind {
+                '1' => 9,
+                '2' => 10,
+                _ => 11,
             };
+            let fields = line.splitn(bound, ' ').collect::<Vec<_>>();
             if fields.len() < 2 {
                 continue;
             }
@@ -276,11 +277,16 @@ pub fn parse_status(project_id: &str, text: &str) -> RepoStatus {
                     st.unstaged += 1;
                 }
             }
+            let status = if kind == 'u' {
+                "冲突".to_string()
+            } else {
+                status_label(index, worktree)
+            };
             st.files.push(FileChange {
                 path: raw_path.to_string(),
                 index,
                 worktree,
-                status: status_label(index, worktree),
+                status,
             });
         }
     }
@@ -381,5 +387,33 @@ mod tests {
         let st = parse_status("p1", text);
         assert_eq!(st.files[0].path, "new name.ts");
         assert_eq!(st.files[0].status, "重命名");
+    }
+
+    #[test]
+    fn parse_status_keeps_spaces_in_path() {
+        let text = "1 .M N... 100644 100644 100644 aaaaaaa bbbbbbb my dir/app.ts\n";
+        let st = parse_status("p1", text);
+        assert_eq!(st.files[0].path, "my dir/app.ts");
+        assert_eq!(st.files[0].status, "修改");
+    }
+
+    #[test]
+    fn parse_status_unmerged_is_conflict_and_counted_both() {
+        let text = "u UU N... 100644 100644 100644 100644 a b c conflicted.txt\n";
+        let st = parse_status("p1", text);
+        assert_eq!(st.files[0].status, "冲突");
+        assert_eq!(st.files[0].index, 'U');
+        assert_eq!(st.files[0].worktree, 'U');
+        assert_eq!(st.staged, 1);
+        assert_eq!(st.unstaged, 1);
+    }
+
+    #[test]
+    fn parse_status_unmerged_added_combo_is_conflict() {
+        let text = "u AA N... 100644 100644 100644 100644 a b c conflicted.txt\n";
+        let st = parse_status("p1", text);
+        assert_eq!(st.files[0].status, "冲突");
+        assert_eq!(st.staged, 1);
+        assert_eq!(st.unstaged, 1);
     }
 }
