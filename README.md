@@ -70,7 +70,7 @@ Of course, it cannot fix bugs or other development problems for you. It only wor
 
 - **Favorites and recents**: pin frequently used projects; launched projects are ordered by recency.
 
-- **Read-only Git page**: a top-level page lists every project with branch / dirty / ahead-behind; select one to see its working tree, commit history with a branch/merge graph, and diffs. Project rows keep a small status chip that jumps here. Local only, with no write operations.
+- **Git page (GitHub Desktop-style)**: a repo picker plus `Changes | History` tabs. Changes lists staged / unstaged / untracked files with per-file diffs; History shows the commit graph, list, and diffs. Project rows keep a status chip that jumps here. Currently read-only — commits and sync are in progress.
 
 ## Quick Start
 
