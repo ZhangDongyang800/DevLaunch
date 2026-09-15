@@ -1,51 +1,37 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { config } from '../store'
-import { refreshStatus, refreshStatuses, statuses } from '../gitStore'
-import type { RepoStatus } from '../types'
+import { branches, refreshRepo, refreshStatuses, selectedRepoId, statuses, tab } from '../gitStore'
+import GitTopBar from '../components/GitTopBar.vue'
+import GitChanges from '../components/GitChanges.vue'
 import GitHistory from '../components/GitHistory.vue'
 
 const props = defineProps<{ projectId?: string }>()
 
 const projects = computed(() => config.value?.projects ?? [])
-const selectedId = ref(props.projectId ?? '')
-const refreshing = ref(false)
-
-const selected = computed(() => projects.value.find((p) => p.id === selectedId.value) ?? null)
+const selected = computed(() => projects.value.find((p) => p.id === selectedRepoId.value) ?? null)
 const selectedStatus = computed(() => (selected.value ? statuses.value[selected.value.id] : undefined))
 
 onMounted(async () => {
-  await refreshAll()
-  if (!selected.value) {
-    const firstRepo = projects.value.find((p) => statuses.value[p.id]?.isRepo) ?? projects.value[0]
-    selectedId.value = firstRepo?.id ?? ''
-  }
+  await refreshStatuses(projects.value.map((p) => p.id))
+  const start =
+    (props.projectId && projects.value.some((p) => p.id === props.projectId) ? props.projectId : '') ||
+    projects.value.find((p) => statuses.value[p.id]?.isRepo)?.id ||
+    projects.value[0]?.id ||
+    ''
+  selectedRepoId.value = start
+  if (start) void refreshRepo(start)
 })
 
 watch(
   () => props.projectId,
   (id) => {
-    if (id) selectedId.value = id
+    if (id) {
+      selectedRepoId.value = id
+      void refreshRepo(id)
+    }
   },
 )
-
-async function refreshAll() {
-  refreshing.value = true
-  try {
-    await refreshStatuses(projects.value.map((p) => p.id))
-  } finally {
-    refreshing.value = false
-  }
-}
-
-function select(id: string) {
-  selectedId.value = id
-  refreshStatus(id)
-}
-
-function dirtyCount(s: RepoStatus | undefined) {
-  return s ? s.staged + s.unstaged + s.untracked : 0
-}
 </script>
 
 <template>
@@ -54,9 +40,9 @@ function dirtyCount(s: RepoStatus | undefined) {
       <h1>Git</h1>
       <span class="row">
         <span class="home-count mono">{{ projects.length }} REPOS</span>
-        <button class="bordered" :disabled="refreshing" @click="refreshAll">
-          {{ refreshing ? '刷新中…' : '刷新' }}
-        </button>
+        <span v-if="selected && branches[selected.id]?.length" class="home-count mono">
+          {{ branches[selected.id].length }} BRANCHES
+        </span>
       </span>
     </div>
 
@@ -65,39 +51,20 @@ function dirtyCount(s: RepoStatus | undefined) {
       <div class="empty-sub">先在「项目」页添加项目，这里会显示它们的仓库状态</div>
     </div>
 
-    <div v-else class="git-layout">
-      <div class="git-repos">
-        <div
-          v-for="p in projects"
-          :key="p.id"
-          class="git-repo"
-          :class="{ active: p.id === selectedId }"
-          @click="select(p.id)"
-        >
-          <div class="gr-head">
-            <span class="gr-name">{{ p.name || '未命名项目' }}</span>
-            <span class="gr-branch mono" :class="{ dim: !statuses[p.id]?.isRepo }">
-              {{ statuses[p.id]?.isRepo ? (statuses[p.id]?.detached ? 'detached' : statuses[p.id]?.branch) : '非仓库' }}
-            </span>
-          </div>
-          <div class="gr-meta mono">
-            <span v-if="dirtyCount(statuses[p.id])" class="gb-dirty">●{{ dirtyCount(statuses[p.id]) }}</span>
-            <span v-if="statuses[p.id]?.ahead" class="gb-ahead">↑{{ statuses[p.id]?.ahead }}</span>
-            <span v-if="statuses[p.id]?.behind" class="gb-behind">↓{{ statuses[p.id]?.behind }}</span>
-            <span v-if="statuses[p.id]?.error" class="gb-warn" :title="statuses[p.id]?.error ?? undefined">—</span>
-          </div>
-        </div>
+    <template v-else>
+      <GitTopBar :projects="projects" />
+
+      <div class="git-tabs">
+        <button class="git-tab" :class="{ active: tab === 'changes' }" @click="tab = 'changes'">Changes</button>
+        <button class="git-tab" :class="{ active: tab === 'history' }" @click="tab = 'history'">History</button>
       </div>
 
-      <div class="git-detail-pane">
-        <GitHistory v-if="selected && selectedStatus?.isRepo" :project-id="selected.id" />
-        <div v-else-if="selected" class="empty-state">
-          <div class="empty-title">{{ selected.name || '未命名项目' }}</div>
-          <div class="empty-sub">
-            {{ selectedStatus?.error || '这不是一个 git 仓库' }}
-          </div>
-        </div>
+      <GitChanges v-if="selected && selectedStatus?.isRepo && tab === 'changes'" :project-id="selected.id" />
+      <GitHistory v-else-if="selected && selectedStatus?.isRepo" :project-id="selected.id" />
+      <div v-else class="empty-state">
+        <div class="empty-title">{{ selected?.name || '未选择仓库' }}</div>
+        <div class="empty-sub">{{ selectedStatus?.error || '这不是一个 git 仓库' }}</div>
       </div>
-    </div>
+    </template>
   </div>
 </template>
