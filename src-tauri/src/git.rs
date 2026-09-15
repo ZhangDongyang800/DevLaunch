@@ -436,6 +436,41 @@ pub fn branches(dir: &Path) -> Result<Vec<BranchInfo>, String> {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FileDiff {
+    pub path: String,
+    pub staged: bool,
+    pub untracked: bool,
+    pub truncated: bool,
+    pub text: String,
+}
+
+/// 未跟踪文件的“diff”= 文件内容预览（≤256KB）。
+pub fn file_diff_untracked(abs: &Path) -> Result<FileDiff, String> {
+    let bytes = std::fs::read(abs).map_err(|e| format!("读取文件失败：{e}"))?;
+    let (text, truncated) = truncate_patch(String::from_utf8_lossy(&bytes).into_owned());
+    Ok(FileDiff { path: String::new(), staged: false, untracked: true, truncated, text })
+}
+
+pub fn file_diff(dir: &Path, path: &str, staged: bool) -> Result<FileDiff, String> {
+    // 已跟踪判定：ls-files --error-unmatch 对未跟踪文件返回非零。
+    let tracked = run_git(dir, &["ls-files", "--error-unmatch", "--", path]).is_ok();
+    if !tracked {
+        let mut d = file_diff_untracked(&dir.join(path))?;
+        d.path = path.to_string();
+        return Ok(d);
+    }
+    let mut args = vec!["diff"];
+    if staged {
+        args.push("--cached");
+    }
+    args.extend(["--", path]);
+    let raw = run_git(dir, &args)?;
+    let (text, truncated) = truncate_patch(raw);
+    Ok(FileDiff { path: path.to_string(), staged, untracked: false, truncated, text })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Commit {
     pub hash: String,
     pub short: String,
@@ -962,5 +997,26 @@ mod tests {
         let text = "main\x1f\x1f\n";
         let got = parse_branches(text, None);
         assert!(got.iter().all(|b| !b.current));
+    }
+
+    #[test]
+    fn file_diff_untracked_previews_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("new.txt");
+        std::fs::write(&f, "hello\nworld").unwrap();
+        let got = file_diff_untracked(&f).unwrap();
+        assert!(got.untracked);
+        assert_eq!(got.text, "hello\nworld");
+        assert!(!got.truncated);
+    }
+
+    #[test]
+    fn file_diff_untracked_truncates_large_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("big.txt");
+        std::fs::write(&f, "a".repeat(300 * 1024)).unwrap();
+        let got = file_diff_untracked(&f).unwrap();
+        assert!(got.truncated);
+        assert!(got.text.len() <= 256 * 1024);
     }
 }
