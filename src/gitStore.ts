@@ -1,10 +1,13 @@
 import { ref } from 'vue'
-import type { GraphRow, RepoStatus } from './types'
-import { gitLog, gitStatuses } from './api'
+import type { BranchInfo, GraphRow, RepoStatus } from './types'
+import { gitBranches, gitLog, gitStatuses } from './api'
 
 export const statuses = ref<Record<string, RepoStatus>>({})
+export const branches = ref<Record<string, BranchInfo[]>>({})
 export const gitError = ref('')
 export const logCache = ref<Record<string, GraphRow[]>>({})
+export const selectedRepoId = ref('')
+export const tab = ref<'changes' | 'history'>('changes')
 
 let refreshing = false
 
@@ -42,4 +45,17 @@ export async function loadLog(projectId: string, reset: boolean): Promise<void> 
     ...logCache.value,
     [projectId]: reset ? page : [...(logCache.value[projectId] ?? []), ...page],
   }
+}
+
+export async function refreshBranches(projectId: string): Promise<void> {
+  try {
+    const list = await gitBranches(projectId)
+    branches.value = { ...branches.value, [projectId]: list }
+  } catch (e) {
+    gitError.value = `${e}`
+  }
+}
+
+export async function refreshRepo(projectId: string): Promise<void> {
+  await Promise.all([refreshStatus(projectId), refreshBranches(projectId), loadLog(projectId, true)])
 }
