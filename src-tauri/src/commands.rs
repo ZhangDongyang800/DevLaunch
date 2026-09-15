@@ -607,7 +607,7 @@ pub fn git_log(
 }
 
 #[tauri::command(async)]
-pub fn git_commit(
+pub fn git_commit_detail(
     state: State<'_, AppState>,
     project_id: String,
     hash: String,
@@ -615,6 +615,28 @@ pub fn git_commit(
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
     git::git_commit(&dir, &hash)
+}
+
+#[tauri::command(async)]
+pub fn git_branches(state: State<'_, AppState>, project_id: String) -> Result<Vec<git::BranchInfo>, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    git::branches(&dir)
+}
+
+#[tauri::command(async)]
+pub fn git_file_diff(
+    state: State<'_, AppState>,
+    project_id: String,
+    path: String,
+    staged: bool,
+) -> Result<git::FileDiff, String> {
+    if path.trim().is_empty() {
+        return Err("文件路径为空".into());
+    }
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    git::file_diff(&dir, &path, staged)
 }
 
 /// Windows 路径比较归一化：统一分隔符、去尾分隔符、不区分大小写。

@@ -79,8 +79,26 @@ export interface RepoStatus {
   staged: number
   unstaged: number
   untracked: number
+  conflicts: number
+  operation: string | null
   files: FileChange[]
   error: string | null
+}
+
+export interface BranchInfo {
+  name: string
+  current: boolean
+  upstream: string | null
+  ahead: number
+  behind: number
+}
+
+export interface FileDiff {
+  path: string
+  staged: boolean
+  untracked: boolean
+  truncated: boolean
+  text: string
 }
 
 export interface Commit {

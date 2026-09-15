@@ -1,9 +1,11 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   AppConfig,
+  BranchInfo,
   CommitDetail,
   DetectResult,
   DetectedProject,
+  FileDiff,
   GraphRow,
   ProjectTemplate,
   RepoStatus,
@@ -37,5 +39,8 @@ export const gitStatuses = (projectIds: string[]) =>
   invoke<RepoStatus[]>('git_statuses', { projectIds })
 export const gitLog = (projectId: string, limit?: number, skip?: number) =>
   invoke<GraphRow[]>('git_log', { projectId, limit, skip })
-export const gitCommit = (projectId: string, hash: string) =>
-  invoke<CommitDetail>('git_commit', { projectId, hash })
+export const gitCommitDetail = (projectId: string, hash: string) =>
+  invoke<CommitDetail>('git_commit_detail', { projectId, hash })
+export const gitBranches = (projectId: string) => invoke<BranchInfo[]>('git_branches', { projectId })
+export const gitFileDiff = (projectId: string, path: string, staged: boolean) =>
+  invoke<FileDiff>('git_file_diff', { projectId, path, staged })

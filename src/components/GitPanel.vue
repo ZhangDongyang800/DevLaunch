@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { gitCommit } from '../api'
+import { gitCommitDetail } from '../api'
 import type { CommitDetail } from '../types'
 import { loadLog, logCache, refreshStatus, statuses } from '../gitStore'
 import GitGraph from './GitGraph.vue'
@@ -50,7 +50,7 @@ async function select(hash: string) {
   error.value = ''
   detail.value = null
   try {
-    const d = await gitCommit(props.projectId, hash)
+    const d = await gitCommitDetail(props.projectId, hash)
     if (seq !== detailSeq) return
     detail.value = d
   } catch (e) {

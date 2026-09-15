@@ -125,7 +125,9 @@ pub fn run() {
             commands::hide_palette,
             commands::git_statuses,
             commands::git_log,
-            commands::git_commit,
+            commands::git_commit_detail,
+            commands::git_branches,
+            commands::git_file_diff,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
