@@ -2,23 +2,22 @@
 import { computed, onMounted, ref } from 'vue'
 import { gitCommitDetail } from '../api'
 import type { CommitDetail } from '../types'
-import { loadLog, logCache, refreshStatus, statuses } from '../gitStore'
+import { loadLog, logCache } from '../gitStore'
 import GitGraph from './GitGraph.vue'
+import GitDiff from './GitDiff.vue'
 
 const props = defineProps<{ projectId: string }>()
 
-const status = computed(() => statuses.value[props.projectId])
 const rows = computed(() => logCache.value[props.projectId] ?? [])
 const selected = ref('')
 const detail = ref<CommitDetail | null>(null)
+const loading = ref(false)
 const error = ref('')
-const loadingDetail = ref(false)
-let detailSeq = 0
+let seq = 0
 let loadingMore = false
 let exhausted = false
 
 onMounted(async () => {
-  void refreshStatus(props.projectId)
   try {
     await loadLog(props.projectId, true)
   } catch (e) {
@@ -44,20 +43,20 @@ async function onScroll(e: Event) {
 }
 
 async function select(hash: string) {
-  const seq = ++detailSeq
+  const mine = ++seq
   selected.value = hash
-  loadingDetail.value = true
+  loading.value = true
   error.value = ''
   detail.value = null
   try {
     const d = await gitCommitDetail(props.projectId, hash)
-    if (seq !== detailSeq) return
+    if (mine !== seq) return
     detail.value = d
   } catch (e) {
-    if (seq !== detailSeq) return
+    if (mine !== seq) return
     error.value = `${e}`
   } finally {
-    if (seq === detailSeq) loadingDetail.value = false
+    if (mine === seq) loading.value = false
   }
 }
 
@@ -75,32 +74,9 @@ function relTime(iso: string): string {
 </script>
 
 <template>
-  <div class="git-panel">
-    <div class="git-panel-head">
-      <span class="gp-title mono">{{ status?.detached ? 'detached' : status?.branch || '—' }}</span>
-      <span v-if="status" class="gp-counts mono">
-        {{ status.staged }} staged · {{ status.unstaged }} unstaged · {{ status.untracked }} untracked
-      </span>
-      <span class="spacer" />
-      <span v-if="error" class="gp-error">{{ error }}</span>
-    </div>
-
-    <div class="git-detail-grid">
-      <div class="git-col git-worktree">
-        <div class="gc-head">工作树 ({{ status?.files.length ?? 0 }})</div>
-        <div class="gc-body">
-          <div v-for="f in status?.files ?? []" :key="f.index + f.worktree + f.path" class="gt-file" :title="f.path">
-            <span class="gt-status mono">{{ f.index !== '.' ? f.index : f.worktree }}</span>
-            <span class="gt-path mono">{{ f.path }}</span>
-            <span class="gt-label">{{ f.status }}</span>
-          </div>
-          <div v-if="status?.isRepo && (status?.files.length ?? 0) === 0" class="gc-empty">工作树干净</div>
-          <div v-else-if="!status?.isRepo" class="gc-empty">—</div>
-        </div>
-      </div>
-
+  <div class="git-history">
+    <div class="git-history-log">
       <div class="git-col git-commits">
-        <div class="gc-head">提交</div>
         <div class="gc-body git-log-scroll" @scroll="onScroll">
           <GitGraph :rows="rows" :selected="selected" />
           <div class="git-log-list">
@@ -120,16 +96,10 @@ function relTime(iso: string): string {
           </div>
         </div>
       </div>
-
-      <div class="git-col git-diff">
-        <div class="gc-head">差异</div>
-        <div class="gc-body">
-          <pre v-if="detail" class="git-patch mono">{{ detail.stat }}{{ detail.patch }}</pre>
-          <div v-else-if="loadingDetail" class="gc-empty">加载中…</div>
-          <div v-else class="gc-empty">选择一条提交查看差异</div>
-          <div v-if="detail?.truncated" class="gt-truncated">diff 过大，未完整渲染</div>
-        </div>
-      </div>
+    </div>
+    <div class="git-col git-diff">
+      <div class="gc-head">差异<span v-if="error" class="gp-error"> · {{ error }}</span></div>
+      <GitDiff :stat="detail?.stat" :text="detail?.patch" :truncated="detail?.truncated" :loading="loading" />
     </div>
   </div>
 </template>

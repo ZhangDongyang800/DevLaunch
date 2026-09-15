@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { config } from '../store'
 import { refreshStatus, refreshStatuses, statuses } from '../gitStore'
 import type { RepoStatus } from '../types'
-import GitPanel from '../components/GitPanel.vue'
+import GitHistory from '../components/GitHistory.vue'
 
 const props = defineProps<{ projectId?: string }>()
 
@@ -90,7 +90,7 @@ function dirtyCount(s: RepoStatus | undefined) {
       </div>
 
       <div class="git-detail-pane">
-        <GitPanel v-if="selected && selectedStatus?.isRepo" :project-id="selected.id" />
+        <GitHistory v-if="selected && selectedStatus?.isRepo" :project-id="selected.id" />
         <div v-else-if="selected" class="empty-state">
           <div class="empty-title">{{ selected.name || '未命名项目' }}</div>
           <div class="empty-sub">
