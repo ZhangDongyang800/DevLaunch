@@ -203,6 +203,8 @@ pub struct RepoStatus {
     pub staged: u32,
     pub unstaged: u32,
     pub untracked: u32,
+    pub conflicts: u32,
+    pub operation: Option<String>,
     pub files: Vec<FileChange>,
     pub error: Option<String>,
 }
@@ -219,6 +221,8 @@ impl RepoStatus {
             staged: 0,
             unstaged: 0,
             untracked: 0,
+            conflicts: 0,
+            operation: None,
             files: Vec::new(),
             error: None,
         }
@@ -307,6 +311,7 @@ pub fn parse_status(project_id: &str, text: &str) -> RepoStatus {
                 fields.last().copied().unwrap_or("")
             };
             if kind == 'u' {
+                st.conflicts += 1;
                 st.staged += 1;
                 st.unstaged += 1;
             } else {
@@ -333,6 +338,28 @@ pub fn parse_status(project_id: &str, text: &str) -> RepoStatus {
     st
 }
 
+/// 依据 `.git` 目录下的标记文件判断进行中的操作（只读）。
+pub fn operation_from_git_dir(git_dir: &Path) -> Option<String> {
+    if git_dir.join("rebase-merge").is_dir() || git_dir.join("rebase-apply").is_dir() {
+        return Some("rebase".into());
+    }
+    if git_dir.join("MERGE_HEAD").is_file() {
+        return Some("merge".into());
+    }
+    if git_dir.join("CHERRY_PICK_HEAD").is_file() {
+        return Some("cherry-pick".into());
+    }
+    None
+}
+
+/// worktree 与 worktree 内的子目录都能解析到真正的 git dir（处理 `.git` 是文件的情况）。
+pub fn in_progress(dir: &Path) -> Option<String> {
+    let git_dir = run_git(dir, &["rev-parse", "--git-dir"]).ok()?;
+    let p = PathBuf::from(git_dir.trim());
+    let abs = if p.is_absolute() { p } else { dir.join(p) };
+    operation_from_git_dir(&abs)
+}
+
 pub fn repo_status(project_id: &str, dir: &Path) -> RepoStatus {
     if !dir.is_dir() {
         return RepoStatus::errored(project_id, format!("目录不存在：{}", dir.display()));
@@ -342,7 +369,11 @@ pub fn repo_status(project_id: &str, dir: &Path) -> RepoStatus {
         return RepoStatus::not_repo(project_id);
     }
     match run_git(dir, &["--no-optional-locks", "status", "--porcelain=v2", "--branch"]) {
-        Ok(text) => parse_status(project_id, &text),
+        Ok(text) => {
+            let mut st = parse_status(project_id, &text);
+            st.operation = in_progress(dir);
+            st
+        }
         Err(e) => RepoStatus::errored(project_id, e),
     }
 }
@@ -832,5 +863,28 @@ mod tests {
         assert!(truncated);
         assert!(out.len() <= 256 * 1024);
         assert!(out.chars().all(|c| c == '中'));
+    }
+
+    #[test]
+    fn parse_status_counts_conflicts() {
+        let text = "u UU N... 100644 100644 100644 100644 a b c both.txt\n1 M. N... 100644 100644 100644 a b staged.txt\n";
+        let st = parse_status("p1", text);
+        assert_eq!(st.conflicts, 1);
+        assert_eq!(st.staged, 2); // u + staged
+        assert_eq!(st.unstaged, 1); // u
+    }
+
+    #[test]
+    fn operation_from_git_dir_detects_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(operation_from_git_dir(dir.path()), None);
+        std::fs::write(dir.path().join("MERGE_HEAD"), "x").unwrap();
+        assert_eq!(operation_from_git_dir(dir.path()), Some("merge".into()));
+        std::fs::remove_file(dir.path().join("MERGE_HEAD")).unwrap();
+        std::fs::create_dir(dir.path().join("rebase-merge")).unwrap();
+        assert_eq!(operation_from_git_dir(dir.path()), Some("rebase".into()));
+        std::fs::remove_dir(dir.path().join("rebase-merge")).unwrap();
+        std::fs::write(dir.path().join("CHERRY_PICK_HEAD"), "x").unwrap();
+        assert_eq!(operation_from_git_dir(dir.path()), Some("cherry-pick".into()));
     }
 }
