@@ -901,6 +901,39 @@ button.star.on { color: var(--signal); }
 .pi-cmd { color: var(--text); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pi-wd { margin-left: auto; color: var(--faint); font-size: 11px; }
 
+/* ---------- git changes (read-only) ---------- */
+
+.git-changes {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 1.4fr);
+  grid-template-rows: minmax(260px, 1fr);
+  gap: 12px;
+}
+.git-changes-lists {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 12px;
+  min-width: 0;
+}
+.gt-file.clickable { cursor: pointer; }
+.gt-file.clickable:hover { background: var(--elevated); }
+.gt-file.active { background: var(--signal-dim); }
+.git-diff-body { padding: 0; }
+.git-patch-tag {
+  margin: 0;
+  padding: 4px 8px;
+  color: var(--faint);
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+@media (max-width: 900px) {
+  .git-changes { grid-template-columns: 1fr; grid-template-rows: auto auto; }
+  .git-changes-lists { grid-template-rows: auto auto; }
+  .git-changes .gc-body { height: 200px; }
+}
+
 /* ---------- home git overview ---------- */
 
 .git-badge {
