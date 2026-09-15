@@ -380,6 +380,62 @@ pub fn repo_status(project_id: &str, dir: &Path) -> RepoStatus {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BranchInfo {
+    pub name: String,
+    pub current: bool,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+}
+
+/// 解析 `for-each-ref --format=%(refname:short)%x1f%(upstream:short)%x1f%(upstream:track)`。
+pub fn parse_branches(text: &str, current: Option<&str>) -> Vec<BranchInfo> {
+    text.split('\n')
+        .map(str::trim_end)
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            let mut f = line.split('\u{1f}');
+            let name = f.next().unwrap_or("").to_string();
+            let upstream = f.next().unwrap_or("").trim();
+            let track = f.next().unwrap_or("").trim();
+            let mut ahead = 0;
+            let mut behind = 0;
+            if let Some(inner) = track.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                for part in inner.split(',') {
+                    let part = part.trim();
+                    if let Some(v) = part.strip_prefix("ahead ") {
+                        ahead = v.trim().parse().unwrap_or(0);
+                    } else if let Some(v) = part.strip_prefix("behind ") {
+                        behind = v.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
+            BranchInfo {
+                current: current == Some(name.as_str()),
+                name,
+                upstream: if upstream.is_empty() { None } else { Some(upstream.to_string()) },
+                ahead,
+                behind,
+            }
+        })
+        .collect()
+}
+
+pub fn branches(dir: &Path) -> Result<Vec<BranchInfo>, String> {
+    let text = run_git(
+        dir,
+        &[
+            "for-each-ref",
+            "refs/heads",
+            "--format=%(refname:short)\u{1f}%(upstream:short)\u{1f}%(upstream:track)",
+        ],
+    )?;
+    let current = run_git(dir, &["symbolic-ref", "--short", "HEAD"]).ok();
+    Ok(parse_branches(&text, current.as_deref().map(str::trim)))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Commit {
     pub hash: String,
     pub short: String,
@@ -886,5 +942,25 @@ mod tests {
         std::fs::remove_dir(dir.path().join("rebase-merge")).unwrap();
         std::fs::write(dir.path().join("CHERRY_PICK_HEAD"), "x").unwrap();
         assert_eq!(operation_from_git_dir(dir.path()), Some("cherry-pick".into()));
+    }
+
+    #[test]
+    fn parse_branches_reads_upstream_track() {
+        let text = "main\x1forigin/main\x1f[ahead 2, behind 1]\nfeature\x1f\x1f\ndev\x1forigin/dev\x1f[gone]\n";
+        let got = parse_branches(text, Some("main"));
+        assert_eq!(got.len(), 3);
+        assert!(got[0].current);
+        assert_eq!(got[0].upstream.as_deref(), Some("origin/main"));
+        assert_eq!((got[0].ahead, got[0].behind), (2, 1));
+        assert_eq!(got[1].upstream, None);
+        assert!(!got[1].current);
+        assert_eq!((got[2].ahead, got[2].behind), (0, 0));
+    }
+
+    #[test]
+    fn parse_branches_detached_has_no_current() {
+        let text = "main\x1f\x1f\n";
+        let got = parse_branches(text, None);
+        assert!(got.iter().all(|b| !b.current));
     }
 }
