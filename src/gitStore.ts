@@ -2,18 +2,23 @@ import { ref } from 'vue'
 import type { BranchInfo, GraphRow, RepoStatus } from './types'
 import {
   gitBranches,
+  gitCherryPick,
   gitCommit,
   gitCreateBranch,
   gitDeleteBranch,
   gitDiscard,
+  gitFileHistory,
   gitLog,
   gitMerge,
   gitRebase,
   gitRenameBranch,
+  gitReset,
+  gitRevert,
   gitStage,
   gitStatuses,
   gitSwitchBranch,
   gitUnstage,
+  openFile,
 } from './api'
 
 export const statuses = ref<Record<string, RepoStatus>>({})
@@ -102,3 +107,28 @@ export const renameBranch = (projectId: string, oldName: string, newName: string
   runWrite(projectId, () => gitRenameBranch(projectId, oldName, newName))
 export const mergeBranch = (projectId: string, name: string) => runWrite(projectId, () => gitMerge(projectId, name))
 export const rebaseBranch = (projectId: string, onto: string) => runWrite(projectId, () => gitRebase(projectId, onto))
+export const revertCommit = (projectId: string, hash: string) => runWrite(projectId, () => gitRevert(projectId, hash))
+export const cherryPickCommit = (projectId: string, hash: string) =>
+  runWrite(projectId, () => gitCherryPick(projectId, hash))
+export const resetTo = (projectId: string, hash: string, mode: 'soft' | 'mixed') =>
+  runWrite(projectId, () => gitReset(projectId, hash, mode))
+
+export const openFileInApp = (projectId: string, path: string) => openFile(projectId, path)
+
+export async function loadLogFiltered(
+  projectId: string,
+  reset: boolean,
+  query: string,
+  author: string,
+): Promise<void> {
+  const skip = reset ? 0 : logCache.value[projectId]?.length ?? 0
+  const page = await gitLog(projectId, 100, skip, query || undefined, author || undefined)
+  logCache.value = {
+    ...logCache.value,
+    [projectId]: reset ? page : [...(logCache.value[projectId] ?? []), ...page],
+  }
+}
+
+export async function loadFileHistory(projectId: string, path: string): Promise<GraphRow[]> {
+  return gitFileHistory(projectId, path, 100)
+}

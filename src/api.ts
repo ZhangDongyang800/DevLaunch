@@ -38,8 +38,10 @@ export const hidePalette = () => invoke<void>('hide_palette')
 
 export const gitStatuses = (projectIds: string[]) =>
   invoke<RepoStatus[]>('git_statuses', { projectIds })
-export const gitLog = (projectId: string, limit?: number, skip?: number) =>
-  invoke<GraphRow[]>('git_log', { projectId, limit, skip })
+export const gitLog = (projectId: string, limit?: number, skip?: number, query?: string, author?: string) =>
+  invoke<GraphRow[]>('git_log', { projectId, limit, skip, query, author })
+export const gitFileHistory = (projectId: string, path: string, limit?: number) =>
+  invoke<GraphRow[]>('git_file_history', { projectId, path, limit })
 export const gitCommitDetail = (projectId: string, hash: string) =>
   invoke<CommitDetail>('git_commit_detail', { projectId, hash })
 export const gitBranches = (projectId: string) => invoke<BranchInfo[]>('git_branches', { projectId })
@@ -65,4 +67,9 @@ export const gitRenameBranch = (projectId: string, oldName: string, newName: str
   invoke<void>('git_rename_branch', { projectId, oldName, newName })
 export const gitMerge = (projectId: string, name: string) => invoke<void>('git_merge', { projectId, name })
 export const gitRebase = (projectId: string, onto: string) => invoke<void>('git_rebase', { projectId, onto })
+export const gitRevert = (projectId: string, hash: string) => invoke<void>('git_revert', { projectId, hash })
+export const gitCherryPick = (projectId: string, hash: string) => invoke<void>('git_cherry_pick', { projectId, hash })
+export const gitReset = (projectId: string, hash: string, mode: 'soft' | 'mixed') =>
+  invoke<void>('git_reset', { projectId, hash, mode })
+export const openFile = (projectId: string, path: string) => invoke<void>('open_file', { projectId, path })
 export const getGitInfo = () => invoke<GitInfo>('get_git_info')
