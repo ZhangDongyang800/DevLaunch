@@ -30,6 +30,11 @@ export interface Settings {
   gitPath?: string | null
 }
 
+export interface PushResult {
+  branch: string
+  setUpstream: boolean
+}
+
 export interface GitInfo {
   configured: string | null
   resolved: string | null

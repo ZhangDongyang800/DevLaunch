@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { busy, commit, statuses } from '../gitStore'
+import { busy, commit, pushRemote, statuses } from '../gitStore'
 
 const props = defineProps<{ projectId: string }>()
 const emit = defineEmits<{ notify: [msg: string, kind?: 'ok' | 'err'] }>()
@@ -26,6 +26,19 @@ async function doCommit() {
     emit('notify', `${e}`, 'err')
   }
 }
+
+async function doCommitAndPush() {
+  if (!canCommit.value) return
+  try {
+    await commit(props.projectId, message.value, amend.value)
+    message.value = ''
+    amend.value = false
+    const r = await pushRemote(props.projectId)
+    emit('notify', r.setUpstream ? `已提交并推送（设置 upstream：${r.branch}）` : '已提交并推送')
+  } catch (e) {
+    emit('notify', `${e}`, 'err')
+  }
+}
 </script>
 
 <template>
@@ -46,6 +59,7 @@ async function doCommit() {
       <span v-if="blocked" class="commit-busy">存在未完成的 {{ status?.operation }}，请先在终端处理</span>
       <span v-else-if="busy" class="commit-busy">处理中…</span>
       <button class="primary" :disabled="!canCommit" @click="doCommit">Commit</button>
+      <button class="bordered" :disabled="!canCommit" @click="doCommitAndPush">Commit &amp; Push</button>
     </div>
   </div>
 </template>

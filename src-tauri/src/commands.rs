@@ -794,6 +794,40 @@ pub fn git_reset(state: State<'_, AppState>, project_id: String, hash: String, m
     crate::git_write::reset(&dir, &hash, &mode)
 }
 
+#[tauri::command(async)]
+pub fn git_fetch(state: State<'_, AppState>, project_id: String) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::fetch(&dir)
+}
+
+#[tauri::command(async)]
+pub fn git_pull(state: State<'_, AppState>, project_id: String) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::pull(&dir)
+}
+
+#[tauri::command(async)]
+pub fn git_push(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<crate::git_write::PushOutcome, String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::push(&dir)
+}
+
+#[tauri::command(async)]
+pub fn git_last_fetch(state: State<'_, AppState>, project_id: String) -> Result<Option<u64>, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    Ok(crate::git_write::last_fetch(&dir))
+}
+
 #[tauri::command]
 pub fn open_file(state: State<AppState>, project_id: String, path: String) -> Result<(), String> {
     let cfg = state.config.lock().unwrap().clone();

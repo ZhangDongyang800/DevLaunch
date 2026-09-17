@@ -151,6 +151,57 @@ pub fn reset(dir: &Path, hash: &str, mode: &str) -> Result<(), String> {
     run_write(dir, &["reset", flag, hash.trim()]).map(|_| ())
 }
 
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// 网络操作：允许 Git Credential Manager 弹窗，长超时。
+fn run_net(dir: &Path, args: &[&str]) -> Result<String, String> {
+    run_git_opts(dir, args, GitRunOpts { allow_prompt: true, timeout: NETWORK_TIMEOUT, stdin_data: None })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushOutcome {
+    pub branch: String,
+    pub set_upstream: bool,
+}
+
+pub fn fetch(dir: &Path) -> Result<(), String> {
+    run_net(dir, &["fetch"]).map(|_| ())
+}
+
+pub fn pull(dir: &Path) -> Result<(), String> {
+    run_net(dir, &["pull"]).map(|_| ()).map_err(|e| conflict_or(dir, e))
+}
+
+pub fn push(dir: &Path) -> Result<PushOutcome, String> {
+    let branch = run_git(dir, &["symbolic-ref", "--short", "HEAD"])
+        .map_err(|_| "当前处于 detached HEAD，无法推送".to_string())?
+        .trim()
+        .to_string();
+    match run_net(dir, &["push"]) {
+        Ok(_) => Ok(PushOutcome { branch, set_upstream: false }),
+        Err(e) => {
+            let no_upstream = e.contains("no upstream branch")
+                || e.contains("has no upstream branch")
+                || e.contains("set-upstream");
+            if no_upstream && run_git(dir, &["remote", "get-url", "origin"]).is_ok() {
+                run_net(dir, &["push", "-u", "origin", branch.as_str()])?;
+                Ok(PushOutcome { branch, set_upstream: true })
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// `.git/FETCH_HEAD` 的 mtime（Unix 秒）；从未 fetch 过返回 None。
+pub fn last_fetch(dir: &Path) -> Option<u64> {
+    let git_dir = run_git(dir, &["rev-parse", "--absolute-git-dir"]).ok()?;
+    let path = std::path::PathBuf::from(git_dir.trim()).join("FETCH_HEAD");
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

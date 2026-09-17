@@ -145,6 +145,10 @@ pub fn run() {
             commands::git_cherry_pick,
             commands::git_reset,
             commands::git_file_history,
+            commands::git_fetch,
+            commands::git_pull,
+            commands::git_push,
+            commands::git_last_fetch,
             commands::open_file,
             commands::get_git_info,
         ])

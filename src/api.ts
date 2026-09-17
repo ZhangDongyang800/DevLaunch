@@ -9,6 +9,7 @@ import type {
   GraphRow,
   GitInfo,
   ProjectTemplate,
+  PushResult,
   RepoStatus,
 } from './types'
 
@@ -72,4 +73,8 @@ export const gitCherryPick = (projectId: string, hash: string) => invoke<void>('
 export const gitReset = (projectId: string, hash: string, mode: 'soft' | 'mixed') =>
   invoke<void>('git_reset', { projectId, hash, mode })
 export const openFile = (projectId: string, path: string) => invoke<void>('open_file', { projectId, path })
+export const gitFetch = (projectId: string) => invoke<void>('git_fetch', { projectId })
+export const gitPull = (projectId: string) => invoke<void>('git_pull', { projectId })
+export const gitPush = (projectId: string) => invoke<PushResult>('git_push', { projectId })
+export const gitLastFetch = (projectId: string) => invoke<number | null>('git_last_fetch', { projectId })
 export const getGitInfo = () => invoke<GitInfo>('get_git_info')

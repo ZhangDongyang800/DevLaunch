@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import type { BranchInfo, GraphRow, RepoStatus } from './types'
+import type { BranchInfo, GraphRow, PushResult, RepoStatus } from './types'
 import {
   gitBranches,
   gitCherryPick,
@@ -8,8 +8,12 @@ import {
   gitDeleteBranch,
   gitDiscard,
   gitFileHistory,
+  gitFetch,
+  gitLastFetch,
   gitLog,
   gitMerge,
+  gitPull,
+  gitPush,
   gitRebase,
   gitRenameBranch,
   gitReset,
@@ -114,6 +118,31 @@ export const resetTo = (projectId: string, hash: string, mode: 'soft' | 'mixed')
   runWrite(projectId, () => gitReset(projectId, hash, mode))
 
 export const openFileInApp = (projectId: string, path: string) => openFile(projectId, path)
+
+export const lastFetch = ref<Record<string, number | null>>({})
+
+export async function loadLastFetch(projectId: string): Promise<void> {
+  try {
+    lastFetch.value = { ...lastFetch.value, [projectId]: await gitLastFetch(projectId) }
+  } catch {
+    // 忽略：非仓库或缺 git
+  }
+}
+
+export const fetchRemote = (projectId: string) => runWrite(projectId, () => gitFetch(projectId))
+export const pullRemote = (projectId: string) => runWrite(projectId, () => gitPull(projectId))
+
+export async function pushRemote(projectId: string): Promise<PushResult> {
+  if (busy.value) throw new Error('已有 Git 操作进行中，请稍候')
+  busy.value = true
+  try {
+    const result = await gitPush(projectId)
+    await refreshRepo(projectId)
+    return result
+  } finally {
+    busy.value = false
+  }
+}
 
 export async function loadLogFiltered(
   projectId: string,

@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import type { Project, RepoStatus } from '../types'
 import {
   branches,
   busy,
   createBranch,
   deleteBranch,
+  fetchRemote,
+  loadLastFetch,
+  lastFetch,
   mergeBranch,
+  pullRemote,
+  pushRemote,
   rebaseBranch,
   refreshRepo,
   refreshStatuses,
@@ -32,6 +37,63 @@ const mode = ref<'' | 'new' | 'rename' | 'delete' | 'merge' | 'rebase'>('')
 const input = ref('')
 const checkout = ref(true)
 const force = ref(false)
+
+const ahead = computed(() => status.value?.ahead ?? 0)
+const behind = computed(() => status.value?.behind ?? 0)
+const hasUpstream = computed(() => !!locals.value.find((b) => b.current)?.upstream)
+const canPush = computed(() => !blocked.value && (ahead.value > 0 || !hasUpstream.value))
+
+const lastFetchText = computed(() => {
+  const t = selected.value ? lastFetch.value[selected.value.id] : null
+  if (!t) return '从未'
+  const d = Date.now() - t * 1000
+  const day = 86_400_000
+  if (d < 60_000) return '刚刚'
+  if (d < 3_600_000) return `${Math.floor(d / 60_000)} 分钟前`
+  if (d < day) return `${Math.floor(d / 3_600_000)} 小时前`
+  return `${Math.floor(d / day)} 天前`
+})
+
+onMounted(() => {
+  if (selectedRepoId.value) void loadLastFetch(selectedRepoId.value)
+})
+
+watch(selectedRepoId, (id) => {
+  if (id) void loadLastFetch(id)
+})
+
+async function doFetch() {
+  if (!selected.value) return
+  try {
+    await fetchRemote(selected.value.id)
+    await loadLastFetch(selected.value.id)
+    emit('notify', '已 fetch origin')
+  } catch (e) {
+    emit('notify', `${e}`, 'err')
+  }
+}
+
+async function doPull() {
+  if (!selected.value || blocked.value) return
+  const { confirm } = await import('@tauri-apps/plugin-dialog')
+  if (!(await confirm('Pull 会拉取并可能合并远程改动，继续？', { title: 'Pull', kind: 'warning' }))) return
+  try {
+    await pullRemote(selected.value.id)
+    emit('notify', '已 pull')
+  } catch (e) {
+    emit('notify', `${e}`, 'err')
+  }
+}
+
+async function doPush() {
+  if (!selected.value || !canPush.value) return
+  try {
+    const r = await pushRemote(selected.value.id)
+    emit('notify', r.setUpstream ? `已推送并设置 upstream（${r.branch}）` : '已推送')
+  } catch (e) {
+    emit('notify', `${e}`, 'err')
+  }
+}
 
 function dirty(p: Project) {
   const s = statuses.value[p.id]
@@ -132,7 +194,10 @@ function open(m: typeof mode.value) {
 
 async function refreshAll() {
   await refreshStatuses(props.projects.map((p) => p.id))
-  if (selectedRepoId.value) await refreshRepo(selectedRepoId.value)
+  if (selectedRepoId.value) {
+    await refreshRepo(selectedRepoId.value)
+    await loadLastFetch(selectedRepoId.value)
+  }
 }
 </script>
 
@@ -168,6 +233,16 @@ async function refreshAll() {
     </span>
 
     <span class="v-spacer" />
+    <span class="gtb-actions">
+      <button class="ghost" :disabled="busy" title="Fetch origin" @click="doFetch">Fetch</button>
+      <button class="ghost" :disabled="blocked || behind === 0" :title="`Pull ${behind} 个提交`" @click="doPull">
+        ↓ Pull<template v-if="behind"> {{ behind }}</template>
+      </button>
+      <button class="ghost" :disabled="!canPush" :title="'Push 到远程'" @click="doPush">
+        ↑ Push<template v-if="ahead"> {{ ahead }}</template>
+      </button>
+    </span>
+    <span class="gtb-last mono">上次拉取 {{ lastFetchText }}</span>
     <span v-if="busy" class="commit-busy">处理中…</span>
     <button class="bordered" @click="refreshAll">刷新</button>
   </div>
