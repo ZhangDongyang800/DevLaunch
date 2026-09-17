@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import type { BranchInfo, GraphRow, RepoStatus } from './types'
-import { gitBranches, gitLog, gitStatuses } from './api'
+import { gitBranches, gitCommit, gitDiscard, gitLog, gitStage, gitStatuses, gitUnstage } from './api'
 
 export const statuses = ref<Record<string, RepoStatus>>({})
 export const branches = ref<Record<string, BranchInfo[]>>({})
@@ -59,3 +59,22 @@ export async function refreshBranches(projectId: string): Promise<void> {
 export async function refreshRepo(projectId: string): Promise<void> {
   await Promise.all([refreshStatus(projectId), refreshBranches(projectId), loadLog(projectId, true)])
 }
+
+export const busy = ref(false)
+
+async function runWrite(projectId: string, fn: () => Promise<unknown>): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try {
+    await fn()
+    await refreshRepo(projectId)
+  } finally {
+    busy.value = false
+  }
+}
+
+export const stage = (projectId: string, paths: string[]) => runWrite(projectId, () => gitStage(projectId, paths))
+export const unstage = (projectId: string, paths: string[]) => runWrite(projectId, () => gitUnstage(projectId, paths))
+export const discard = (projectId: string, paths: string[]) => runWrite(projectId, () => gitDiscard(projectId, paths))
+export const commit = (projectId: string, message: string, amend: boolean) =>
+  runWrite(projectId, () => gitCommit(projectId, message, amend))

@@ -2,109 +2,213 @@
 import { computed, ref, watch } from 'vue'
 import { gitFileDiff } from '../api'
 import type { FileChange, FileDiff } from '../types'
-import { statuses } from '../gitStore'
+import { busy, discard, stage, statuses, unstage } from '../gitStore'
+import { buildTree, type TreeRow } from '../gitTree'
 import GitDiff from './GitDiff.vue'
+import GitCommitBox from './GitCommitBox.vue'
 
 const props = defineProps<{ projectId: string }>()
+const emit = defineEmits<{ notify: [msg: string, kind?: 'ok' | 'err'] }>()
 
 const status = computed(() => statuses.value[props.projectId])
 const files = computed<FileChange[]>(() => status.value?.files ?? [])
-const staged = computed(() =>
+const stagedFiles = computed(() =>
   files.value.filter((f) => f.index !== '.' && f.index !== '?' && f.index !== '!' && f.index !== ' '),
 )
-const unstaged = computed(() =>
+const unstagedFiles = computed(() =>
   files.value.filter((f) => f.worktree !== '.' && f.worktree !== '?' && f.worktree !== '!' && f.worktree !== ' '),
 )
-const untracked = computed(() => files.value.filter((f) => f.index === '?'))
+const untrackedFiles = computed(() => files.value.filter((f) => f.index === '?'))
+const fileMap = computed(() => new Map(files.value.map((f) => [f.path, f])))
 
-const selected = ref('')
+const collapsedStaged = ref(new Set<string>())
+const collapsedUnstaged = ref(new Set<string>())
+const stagedRows = computed<TreeRow[]>(() => buildTree(stagedFiles.value.map((f) => f.path), collapsedStaged.value))
+const unstagedRows = computed<TreeRow[]>(() =>
+  buildTree([...unstagedFiles.value, ...untrackedFiles.value].map((f) => f.path), collapsedUnstaged.value),
+)
+
+const selPath = ref('')
+const selStaged = ref(false)
 const diff = ref<FileDiff | null>(null)
 const loading = ref(false)
 const error = ref('')
+const ignoreWhitespace = ref(false)
+const fullContext = ref(false)
 
-watch(
-  () => props.projectId,
-  () => {
-    selected.value = ''
-    diff.value = null
-  },
-)
+watch(() => props.projectId, reset)
 
-async function open(path: string, isStaged: boolean) {
-  const key = `${isStaged ? 's' : 'w'}:${path}`
-  selected.value = key
+function reset() {
+  selPath.value = ''
+  selStaged.value = false
+  diff.value = null
+  error.value = ''
+  ignoreWhitespace.value = false
+  fullContext.value = false
+}
+
+async function openFile(path: string, staged: boolean) {
+  selPath.value = path
+  selStaged.value = staged
   loading.value = true
   error.value = ''
   diff.value = null
   try {
-    diff.value = await gitFileDiff(props.projectId, path, isStaged)
+    diff.value = await gitFileDiff(props.projectId, path, staged, ignoreWhitespace.value, fullContext.value)
   } catch (e) {
     error.value = `${e}`
   } finally {
     loading.value = false
   }
 }
+
+async function reload() {
+  if (selPath.value) await openFile(selPath.value, selStaged.value)
+}
+
+function toggleWhitespace() {
+  ignoreWhitespace.value = !ignoreWhitespace.value
+  void reload()
+}
+
+function expandAll() {
+  fullContext.value = true
+  void reload()
+}
+
+function toggleCollapse(set: Set<string>, path: string): Set<string> {
+  const next = new Set(set)
+  if (next.has(path)) next.delete(path)
+  else next.add(path)
+  return next
+}
+
+async function action(fn: () => Promise<void>) {
+  try {
+    await fn()
+  } catch (e) {
+    emit('notify', `${e}`, 'err')
+  }
+}
+
+async function stageAll() {
+  const paths = [...unstagedFiles.value, ...untrackedFiles.value].map((f) => f.path)
+  if (paths.length) await action(() => stage(props.projectId, paths))
+}
+
+async function unstageAll() {
+  const paths = stagedFiles.value.map((f) => f.path)
+  if (paths.length) await action(() => unstage(props.projectId, paths))
+}
+
+async function discardFile(path: string) {
+  const { confirm } = await import('@tauri-apps/plugin-dialog')
+  const ok = await confirm(`将丢弃 ${path} 的未提交修改，不可恢复。继续？`, { title: '丢弃修改', kind: 'warning' })
+  if (ok) await action(() => discard(props.projectId, [path]))
+}
+
+function statusLetter(f: FileChange): string {
+  const c = f.index !== '.' && f.index !== ' ' ? f.index : f.worktree
+  return c
+}
 </script>
 
 <template>
   <div class="git-changes">
     <div class="git-changes-lists">
-      <div class="git-col">
-        <div class="gc-head">已暂存 ({{ staged.length }})</div>
-        <div class="gc-body">
-          <div
-            v-for="f in staged"
-            :key="'s' + f.path"
-            class="gt-file clickable"
-            :class="{ active: selected === 's:' + f.path }"
-            :title="f.path"
-            @click="open(f.path, true)"
-          >
-            <span class="gt-status mono">{{ f.index }}</span>
-            <span class="gt-path mono">{{ f.path }}</span>
-            <span class="gt-label">{{ f.status }}</span>
-          </div>
-          <div v-if="staged.length === 0" class="gc-empty">无已暂存改动</div>
+      <div class="file-section">
+        <div class="fs-head">
+          <span>已暂存 ({{ stagedFiles.length }})</span>
+          <span class="v-spacer" />
+          <button class="ghost" :disabled="busy || stagedFiles.length === 0" @click="unstageAll">全部取消暂存</button>
+        </div>
+        <div class="fs-body">
+          <template v-for="row in stagedRows" :key="'s' + row.path">
+            <div
+              v-if="row.isDir"
+              class="tree-dir"
+              :style="{ paddingLeft: 8 + row.indent * 14 + 'px' }"
+              @click="collapsedStaged = toggleCollapse(collapsedStaged, row.path)"
+            >
+              {{ collapsedStaged.has(row.path) ? '▸' : '▾' }} {{ row.name }}
+            </div>
+            <div
+              v-else
+              class="file-row"
+              :class="{ active: selPath === row.path && selStaged }"
+              :style="{ paddingLeft: 8 + row.indent * 14 + 'px' }"
+              @click="openFile(row.path, true)"
+            >
+              <input type="checkbox" checked :disabled="busy" @click.stop="action(() => unstage(projectId, [row.path]))" />
+              <span class="file-status mono">{{ fileMap.get(row.path) ? statusLetter(fileMap.get(row.path)!) : 'M' }}</span>
+              <span class="file-name mono">{{ row.name }}</span>
+            </div>
+          </template>
+          <div v-if="stagedFiles.length === 0" class="gc-empty">无已暂存改动</div>
         </div>
       </div>
 
-      <div class="git-col">
-        <div class="gc-head">未暂存 / 未跟踪 ({{ unstaged.length + untracked.length }})</div>
-        <div class="gc-body">
-          <div
-            v-for="f in unstaged"
-            :key="'w' + f.path"
-            class="gt-file clickable"
-            :class="{ active: selected === 'w:' + f.path }"
-            :title="f.path"
-            @click="open(f.path, false)"
+      <div class="file-section">
+        <div class="fs-head">
+          <span>未暂存 ({{ unstagedFiles.length + untrackedFiles.length }})</span>
+          <span class="v-spacer" />
+          <button
+            class="ghost"
+            :disabled="busy || unstagedFiles.length + untrackedFiles.length === 0"
+            @click="stageAll"
           >
-            <span class="gt-status mono">{{ f.worktree }}</span>
-            <span class="gt-path mono">{{ f.path }}</span>
-            <span class="gt-label">{{ f.status }}</span>
-          </div>
-          <div
-            v-for="f in untracked"
-            :key="'u' + f.path"
-            class="gt-file clickable"
-            :class="{ active: selected === 'w:' + f.path }"
-            :title="f.path"
-            @click="open(f.path, false)"
-          >
-            <span class="gt-status mono">?</span>
-            <span class="gt-path mono">{{ f.path }}</span>
-            <span class="gt-label">未跟踪</span>
-          </div>
-          <div v-if="unstaged.length + untracked.length === 0" class="gc-empty">工作树干净</div>
+            全部暂存
+          </button>
+        </div>
+        <div class="fs-body">
+          <template v-for="row in unstagedRows" :key="'w' + row.path">
+            <div
+              v-if="row.isDir"
+              class="tree-dir"
+              :style="{ paddingLeft: 8 + row.indent * 14 + 'px' }"
+              @click="collapsedUnstaged = toggleCollapse(collapsedUnstaged, row.path)"
+            >
+              {{ collapsedUnstaged.has(row.path) ? '▸' : '▾' }} {{ row.name }}
+            </div>
+            <div
+              v-else
+              class="file-row"
+              :class="{ active: selPath === row.path && !selStaged }"
+              :style="{ paddingLeft: 8 + row.indent * 14 + 'px' }"
+              @click="openFile(row.path, false)"
+            >
+              <input type="checkbox" :disabled="busy" @click.stop="action(() => stage(projectId, [row.path]))" />
+              <span class="file-status mono">{{ fileMap.get(row.path) ? statusLetter(fileMap.get(row.path)!) : '?' }}</span>
+              <span class="file-name mono">{{ row.name }}</span>
+              <button
+                v-if="fileMap.get(row.path) && fileMap.get(row.path)!.index !== '?'"
+                class="ghost file-discard"
+                :disabled="busy"
+                @click.stop="discardFile(row.path)"
+              >
+                丢弃
+              </button>
+            </div>
+          </template>
+          <div v-if="unstagedFiles.length + untrackedFiles.length === 0" class="gc-empty">工作树干净</div>
         </div>
       </div>
     </div>
 
     <div class="git-col git-diff">
       <div class="gc-head">
-        差异<span v-if="diff?.untracked"> · 新文件</span><span v-if="error" class="gp-error"> · {{ error }}</span>
+        差异<span v-if="selPath" class="mono"> · {{ selPath }}</span><span v-if="error" class="gp-error"> · {{ error }}</span>
       </div>
-      <GitDiff :text="diff?.text" :truncated="diff?.truncated" :untracked="diff?.untracked" :loading="loading" />
+      <GitDiff
+        :file="diff"
+        :loading="loading"
+        :ignore-whitespace="ignoreWhitespace"
+        :full-context="fullContext"
+        @toggle-whitespace="toggleWhitespace"
+        @expand-all="expandAll"
+      />
     </div>
+
+    <GitCommitBox :project-id="projectId" @notify="(m, k) => emit('notify', m, k)" />
   </div>
 </template>

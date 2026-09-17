@@ -11,11 +11,14 @@ const props = defineProps<{ projectId: string }>()
 const rows = computed(() => logCache.value[props.projectId] ?? [])
 const selected = ref('')
 const detail = ref<CommitDetail | null>(null)
+const selectedFile = ref(0)
 const loading = ref(false)
 const error = ref('')
 let seq = 0
 let loadingMore = false
 let exhausted = false
+
+const currentFile = computed(() => detail.value?.files[selectedFile.value] ?? null)
 
 onMounted(async () => {
   try {
@@ -45,6 +48,7 @@ async function onScroll(e: Event) {
 async function select(hash: string) {
   const mine = ++seq
   selected.value = hash
+  selectedFile.value = 0
   loading.value = true
   error.value = ''
   detail.value = null
@@ -98,8 +102,24 @@ function relTime(iso: string): string {
       </div>
     </div>
     <div class="git-col git-diff">
-      <div class="gc-head">差异<span v-if="error" class="gp-error"> · {{ error }}</span></div>
-      <GitDiff :stat="detail?.stat" :text="detail?.patch" :truncated="detail?.truncated" :loading="loading" />
+      <div class="gc-head">
+        差异<span v-if="detail" class="mono"> · {{ detail.files.length }} 文件 · <span class="diff-stat-add">+{{ detail.additions }}</span> <span class="diff-stat-del">−{{ detail.deletions }}</span></span>
+        <span v-if="error" class="gp-error"> · {{ error }}</span>
+      </div>
+      <div v-if="detail && detail.files.length > 0" class="commit-files mono">
+        <div
+          v-for="(f, fi) in detail.files"
+          :key="f.path"
+          class="commit-file"
+          :class="{ active: fi === selectedFile }"
+          @click="selectedFile = fi"
+        >
+          <span class="file-name">{{ f.path }}</span>
+          <span class="diff-stat-add">+{{ f.additions }}</span>
+          <span class="diff-stat-del">−{{ f.deletions }}</span>
+        </div>
+      </div>
+      <GitDiff :file="currentFile" :loading="loading" />
     </div>
   </div>
 </template>
