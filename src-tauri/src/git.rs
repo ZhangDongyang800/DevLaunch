@@ -520,37 +520,217 @@ pub fn branches(dir: &Path) -> Result<Vec<BranchInfo>, String> {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DiffLine {
+    pub kind: String,
+    pub old_no: Option<u32>,
+    pub new_no: Option<u32>,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Hunk {
+    pub header: String,
+    pub old_start: u32,
+    pub new_start: u32,
+    pub lines: Vec<DiffLine>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileDiff {
     pub path: String,
     pub staged: bool,
     pub untracked: bool,
+    pub binary: bool,
     pub truncated: bool,
-    pub text: String,
+    pub additions: u32,
+    pub deletions: u32,
+    pub hunks: Vec<Hunk>,
 }
 
-/// 未跟踪文件的“diff”= 文件内容预览（≤256KB）。
-pub fn file_diff_untracked(abs: &Path) -> Result<FileDiff, String> {
+fn parse_hunk_starts(rest: &str) -> (u32, u32) {
+    let mut old = 0;
+    let mut new = 0;
+    for part in rest.split(' ') {
+        if let Some(v) = part.strip_prefix('-') {
+            old = v.split(',').next().unwrap_or("0").parse().unwrap_or(0);
+        } else if let Some(v) = part.strip_prefix('+') {
+            new = v.split(',').next().unwrap_or("0").parse().unwrap_or(0);
+        }
+    }
+    (old, new)
+}
+
+fn flush_hunk(cur: &mut Option<FileDiff>, hunk: &mut Option<Hunk>) {
+    if let (Some(f), Some(h)) = (cur.as_mut(), hunk.take()) {
+        f.hunks.push(h);
+    }
+}
+
+fn flush_file(files: &mut Vec<FileDiff>, cur: &mut Option<FileDiff>, hunk: &mut Option<Hunk>) {
+    flush_hunk(cur, hunk);
+    if let Some(f) = cur.take() {
+        files.push(f);
+    }
+}
+
+/// 解析 `git diff`/`git show` 的统一 diff 文本为结构化文件列表。
+pub fn parse_unified_diff(text: &str) -> Vec<FileDiff> {
+    let mut files: Vec<FileDiff> = Vec::new();
+    let mut cur: Option<FileDiff> = None;
+    let mut hunk: Option<Hunk> = None;
+    let mut old_no = 0u32;
+    let mut new_no = 0u32;
+
+    for line in text.lines() {
+        if line.starts_with("diff --git ") {
+            flush_file(&mut files, &mut cur, &mut hunk);
+            cur = Some(FileDiff {
+                path: String::new(),
+                staged: false,
+                untracked: false,
+                binary: false,
+                truncated: false,
+                additions: 0,
+                deletions: 0,
+                hunks: Vec::new(),
+            });
+            continue;
+        }
+        if cur.is_none() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("+++ ") {
+            flush_hunk(&mut cur, &mut hunk);
+            if let Some(f) = cur.as_mut() {
+                if let Some(p) = rest.strip_prefix("b/") {
+                    f.path = p.to_string();
+                } else if rest != "/dev/null" {
+                    f.path = rest.to_string();
+                }
+            }
+        } else if line.starts_with("Binary files ") && line.ends_with(" differ") {
+            if let Some(f) = cur.as_mut() {
+                f.binary = true;
+            }
+        } else if let Some(rest) = line.strip_prefix("@@ ") {
+            flush_hunk(&mut cur, &mut hunk);
+            let (os, ns) = parse_hunk_starts(rest);
+            old_no = os;
+            new_no = ns;
+            hunk = Some(Hunk { header: format!("@@ {rest}"), old_start: os, new_start: ns, lines: Vec::new() });
+        } else if let Some(h) = hunk.as_mut() {
+            if line.starts_with('\\') {
+                continue; // \ No newline at end of file
+            }
+            let (kind, content) = match line.as_bytes().first() {
+                Some(b'+') => ("add", &line[1..]),
+                Some(b'-') => ("del", &line[1..]),
+                Some(b' ') => ("context", &line[1..]),
+                _ => continue,
+            };
+            let (old_n, new_n) = match kind {
+                "add" => (None, Some(new_no)),
+                "del" => (Some(old_no), None),
+                _ => (Some(old_no), Some(new_no)),
+            };
+            if kind != "add" {
+                old_no += 1;
+            }
+            if kind != "del" {
+                new_no += 1;
+            }
+            if let Some(f) = cur.as_mut() {
+                if kind == "add" {
+                    f.additions += 1;
+                } else if kind == "del" {
+                    f.deletions += 1;
+                }
+            }
+            h.lines.push(DiffLine { kind: kind.into(), old_no: old_n, new_no: new_n, text: content.to_string() });
+        }
+    }
+    flush_file(&mut files, &mut cur, &mut hunk);
+    files
+}
+
+/// 未跟踪文件的“diff”= 整文件视为新增（内容预览，≤256KB）。
+pub fn untracked_file_diff(path: &str, abs: &Path) -> Result<FileDiff, String> {
     let bytes = std::fs::read(abs).map_err(|e| format!("读取文件失败：{e}"))?;
     let (text, truncated) = truncate_patch(String::from_utf8_lossy(&bytes).into_owned());
-    Ok(FileDiff { path: String::new(), staged: false, untracked: true, truncated, text })
+    let total = text.split('\n').count();
+    let mut lines = Vec::new();
+    let mut n = 0u32;
+    for (i, raw) in text.split('\n').enumerate() {
+        if i + 1 == total && raw.is_empty() {
+            continue; // 末尾换行产生的空段
+        }
+        n += 1;
+        lines.push(DiffLine {
+            kind: "add".into(),
+            old_no: None,
+            new_no: Some(n),
+            text: raw.trim_end_matches('\r').to_string(),
+        });
+    }
+    let hunks = if lines.is_empty() {
+        Vec::new()
+    } else {
+        vec![Hunk { header: "@@ 新文件 @@".into(), old_start: 0, new_start: 1, lines }]
+    };
+    Ok(FileDiff {
+        path: path.to_string(),
+        staged: false,
+        untracked: true,
+        binary: false,
+        truncated,
+        additions: n,
+        deletions: 0,
+        hunks,
+    })
 }
 
-pub fn file_diff(dir: &Path, path: &str, staged: bool) -> Result<FileDiff, String> {
+pub fn file_diff(
+    dir: &Path,
+    path: &str,
+    staged: bool,
+    ignore_whitespace: bool,
+    full_context: bool,
+) -> Result<FileDiff, String> {
     // 已跟踪判定：ls-files --error-unmatch 对未跟踪文件返回非零。
     let tracked = run_git(dir, &["ls-files", "--error-unmatch", "--", path]).is_ok();
     if !tracked {
-        let mut d = file_diff_untracked(&dir.join(path))?;
-        d.path = path.to_string();
-        return Ok(d);
+        return untracked_file_diff(path, &dir.join(path));
     }
     let mut args = vec!["diff"];
     if staged {
         args.push("--cached");
     }
+    if ignore_whitespace {
+        args.push("-w");
+    }
+    if full_context {
+        args.push("--unified=100000");
+    }
     args.extend(["--", path]);
     let raw = run_git(dir, &args)?;
-    let (text, truncated) = truncate_patch(raw);
-    Ok(FileDiff { path: path.to_string(), staged, untracked: false, truncated, text })
+    let (raw, truncated) = truncate_patch(raw);
+    let mut parsed = parse_unified_diff(&raw);
+    let mut f = parsed.pop().unwrap_or(FileDiff {
+        path: path.to_string(),
+        staged,
+        untracked: false,
+        binary: false,
+        truncated: false,
+        additions: 0,
+        deletions: 0,
+        hunks: Vec::new(),
+    });
+    f.path = path.to_string();
+    f.staged = staged;
+    f.truncated = truncated;
+    Ok(f)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -720,8 +900,10 @@ const MAX_PATCH_BYTES: usize = 256 * 1024;
 pub struct CommitDetail {
     pub hash: String,
     pub stat: String,
-    pub patch: String,
+    pub additions: u32,
+    pub deletions: u32,
     pub truncated: bool,
+    pub files: Vec<FileDiff>,
 }
 
 pub fn validate_hash(hash: &str) -> Result<(), String> {
@@ -744,12 +926,15 @@ pub fn truncate_patch(patch: String) -> (String, bool) {
     (patch[..end].to_string(), true)
 }
 
-pub fn git_commit(dir: &Path, hash: &str) -> Result<CommitDetail, String> {
+pub fn commit_detail(dir: &Path, hash: &str) -> Result<CommitDetail, String> {
     validate_hash(hash)?;
     let stat = run_git(dir, &["show", "--stat", "--format=%H", hash, "--"])?;
-    let patch = run_git(dir, &["show", "--format=", "--patch", hash, "--"])?;
-    let (patch, truncated) = truncate_patch(patch);
-    Ok(CommitDetail { hash: hash.to_string(), stat, patch, truncated })
+    let raw = run_git(dir, &["show", "--format=", "--patch", hash, "--"])?;
+    let (raw, truncated) = truncate_patch(raw);
+    let files = parse_unified_diff(&raw);
+    let additions = files.iter().map(|f| f.additions).sum();
+    let deletions = files.iter().map(|f| f.deletions).sum();
+    Ok(CommitDetail { hash: hash.to_string(), stat, additions, deletions, truncated, files })
 }
 
 #[cfg(test)]
@@ -1084,24 +1269,67 @@ mod tests {
     }
 
     #[test]
-    fn file_diff_untracked_previews_content() {
+    fn untracked_file_diff_builds_add_hunks() {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("new.txt");
-        std::fs::write(&f, "hello\nworld").unwrap();
-        let got = file_diff_untracked(&f).unwrap();
+        std::fs::write(&f, "alpha\nbeta\n").unwrap();
+        let got = untracked_file_diff("new.txt", &f).unwrap();
         assert!(got.untracked);
-        assert_eq!(got.text, "hello\nworld");
-        assert!(!got.truncated);
+        assert_eq!(got.additions, 2);
+        assert_eq!(got.deletions, 0);
+        assert_eq!(got.hunks.len(), 1);
+        assert_eq!(got.hunks[0].lines[0].kind, "add");
+        assert_eq!(got.hunks[0].lines[0].new_no, Some(1));
     }
 
     #[test]
-    fn file_diff_untracked_truncates_large_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = dir.path().join("big.txt");
-        std::fs::write(&f, "a".repeat(300 * 1024)).unwrap();
-        let got = file_diff_untracked(&f).unwrap();
-        assert!(got.truncated);
-        assert!(got.text.len() <= 256 * 1024);
+    fn parse_unified_diff_multi_file_with_numbers() {
+        let text = r#"diff --git a/a.txt b/a.txt
+--- a/a.txt
++++ b/a.txt
+@@ -1,3 +1,4 @@
+ line1
+-old2
++new2
++extra
+ line3
+diff --git a/new.txt b/new.txt
+new file mode 100644
+--- /dev/null
++++ b/new.txt
+@@ -0,0 +1,2 @@
++alpha
++beta
+"#;
+        let files = parse_unified_diff(text);
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path, "a.txt");
+        assert_eq!(files[0].additions, 2);
+        assert_eq!(files[0].deletions, 1);
+        let lines = &files[0].hunks[0].lines;
+        assert_eq!(lines[0].kind, "context");
+        assert_eq!(lines[0].old_no, Some(1));
+        assert_eq!(lines[0].new_no, Some(1));
+        assert_eq!(lines[1].kind, "del");
+        assert_eq!(lines[1].old_no, Some(2));
+        assert_eq!(lines[1].new_no, None);
+        assert_eq!(files[1].path, "new.txt");
+        assert_eq!(files[1].additions, 2);
+        assert_eq!(files[1].deletions, 0);
+        assert_eq!(files[1].hunks[0].lines[0].new_no, Some(1));
+    }
+
+    #[test]
+    fn parse_unified_diff_binary_and_no_newline() {
+        let bin = "diff --git a/x.bin b/x.bin\nBinary files a/x.bin and b/x.bin differ\n";
+        let files = parse_unified_diff(bin);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].binary);
+        assert!(files[0].hunks.is_empty());
+
+        let noeol = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n+new\n\\ No newline at end of file\n";
+        let files2 = parse_unified_diff(noeol);
+        assert_eq!(files2[0].hunks[0].lines.len(), 2);
     }
 
     #[test]

@@ -618,7 +618,7 @@ pub fn git_commit_detail(
 ) -> Result<git::CommitDetail, String> {
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
-    git::git_commit(&dir, &hash)
+    git::commit_detail(&dir, &hash)
 }
 
 #[tauri::command(async)]
@@ -634,13 +634,15 @@ pub fn git_file_diff(
     project_id: String,
     path: String,
     staged: bool,
+    ignore_whitespace: bool,
+    full_context: bool,
 ) -> Result<git::FileDiff, String> {
     if path.trim().is_empty() {
         return Err("文件路径为空".into());
     }
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
-    git::file_diff(&dir, &path, staged)
+    git::file_diff(&dir, &path, staged, ignore_whitespace, full_context)
 }
 
 #[derive(Debug, Clone, Serialize)]
