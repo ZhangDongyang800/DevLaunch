@@ -141,6 +141,11 @@ pub fn run() {
             commands::git_rename_branch,
             commands::git_merge,
             commands::git_rebase,
+            commands::git_revert,
+            commands::git_cherry_pick,
+            commands::git_reset,
+            commands::git_file_history,
+            commands::open_file,
             commands::get_git_info,
         ])
         .run(tauri::generate_context!())

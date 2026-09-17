@@ -920,6 +920,44 @@ pub fn git_log(dir: &Path, limit: u32, skip: u32) -> Result<Vec<Commit>, String>
     }
 }
 
+/// 带筛选的 log：`query` → `--grep`、`author` → `--author`、`path` → 仅该文件历史。
+/// 值以 `--grep=`/`--author=` 单参数形式传入（不经 shell，也不会被当成选项）。
+pub fn git_log_filtered(
+    dir: &Path,
+    limit: u32,
+    skip: u32,
+    query: Option<&str>,
+    author: Option<&str>,
+    path: Option<&str>,
+) -> Result<Vec<Commit>, String> {
+    let limit = limit.min(200).to_string();
+    let skip = skip.to_string();
+    let grep = query.filter(|q| !q.trim().is_empty()).map(|q| format!("--grep={q}"));
+    let auth = author.filter(|a| !a.trim().is_empty()).map(|a| format!("--author={a}"));
+
+    let mut args: Vec<&str> = vec!["log", "--date-order", "-i", "--max-count", limit.as_str(), "--skip", skip.as_str()];
+    if let Some(g) = grep.as_deref() {
+        args.push(g);
+    }
+    if let Some(a) = auth.as_deref() {
+        args.push(a);
+    }
+    args.push(LOG_FORMAT);
+    if let Some(p) = path {
+        args.push("--");
+        args.push(p);
+    }
+    match run_git(dir, &args) {
+        Ok(text) => Ok(parse_log(&text)),
+        Err(e) => {
+            let in_work_tree = run_git(dir, &["rev-parse", "--is-inside-work-tree"]).is_ok();
+            let head_exists = in_work_tree
+                && run_git(dir, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok();
+            log_result(Err(e), in_work_tree, head_exists)
+        }
+    }
+}
+
 const MAX_PATCH_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize)]

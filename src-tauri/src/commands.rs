@@ -604,10 +604,35 @@ pub fn git_log(
     project_id: String,
     limit: Option<u32>,
     skip: Option<u32>,
+    query: Option<String>,
+    author: Option<String>,
 ) -> Result<Vec<git::GraphRow>, String> {
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
-    let commits = git::git_log(&dir, limit.unwrap_or(100), skip.unwrap_or(0))?;
+    let commits = git::git_log_filtered(
+        &dir,
+        limit.unwrap_or(100),
+        skip.unwrap_or(0),
+        query.as_deref(),
+        author.as_deref(),
+        None,
+    )?;
+    Ok(git::assign_lanes(&commits))
+}
+
+#[tauri::command(async)]
+pub fn git_file_history(
+    state: State<'_, AppState>,
+    project_id: String,
+    path: String,
+    limit: Option<u32>,
+) -> Result<Vec<git::GraphRow>, String> {
+    if path.trim().is_empty() {
+        return Err("文件路径为空".into());
+    }
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    let commits = git::git_log_filtered(&dir, limit.unwrap_or(100), 0, None, None, Some(&path))?;
     Ok(git::assign_lanes(&commits))
 }
 
@@ -743,6 +768,49 @@ pub fn git_rebase(state: State<'_, AppState>, project_id: String, onto: String) 
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
     crate::git_write::rebase(&dir, &onto)
+}
+
+#[tauri::command(async)]
+pub fn git_revert(state: State<'_, AppState>, project_id: String, hash: String) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::revert(&dir, &hash)
+}
+
+#[tauri::command(async)]
+pub fn git_cherry_pick(state: State<'_, AppState>, project_id: String, hash: String) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::cherry_pick(&dir, &hash)
+}
+
+#[tauri::command(async)]
+pub fn git_reset(state: State<'_, AppState>, project_id: String, hash: String, mode: String) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::reset(&dir, &hash, &mode)
+}
+
+#[tauri::command]
+pub fn open_file(state: State<AppState>, project_id: String, path: String) -> Result<(), String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    let p = dir.join(&path);
+    if !p.is_file() {
+        return Err(format!("文件不存在：{}", p.display()));
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer").arg(&p).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(windows))]
+    {
+        return Err("open_file 仅支持 Windows".into());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]

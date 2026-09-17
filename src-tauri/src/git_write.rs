@@ -1,4 +1,4 @@
-use crate::git::{run_git, run_git_opts, GitRunOpts};
+use crate::git::{run_git, run_git_opts, validate_hash, GitRunOpts};
 use std::path::Path;
 use std::time::Duration;
 
@@ -130,6 +130,27 @@ pub fn rebase(dir: &Path, onto: &str) -> Result<(), String> {
     run_write(dir, &["rebase", onto.trim()]).map(|_| ()).map_err(|e| conflict_or(dir, e))
 }
 
+pub fn revert(dir: &Path, hash: &str) -> Result<(), String> {
+    validate_hash(hash)?;
+    run_write(dir, &["revert", "--no-edit", hash.trim()]).map(|_| ()).map_err(|e| conflict_or(dir, e))
+}
+
+pub fn cherry_pick(dir: &Path, hash: &str) -> Result<(), String> {
+    validate_hash(hash)?;
+    run_write(dir, &["cherry-pick", hash.trim()]).map(|_| ()).map_err(|e| conflict_or(dir, e))
+}
+
+/// 仅支持 soft / mixed（绝不 hard）。
+pub fn reset(dir: &Path, hash: &str, mode: &str) -> Result<(), String> {
+    validate_hash(hash)?;
+    let flag = match mode {
+        "soft" => "--soft",
+        "mixed" => "--mixed",
+        _ => return Err("不支持的 reset 模式（仅 soft / mixed）".into()),
+    };
+    run_write(dir, &["reset", flag, hash.trim()]).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,8 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_ref_name_matrix() {
-        assert!(validate_ref_name("feature/x").is_ok());
+    fn validate_ref_name_matrix() {        assert!(validate_ref_name("feature/x").is_ok());
         assert!(validate_ref_name("main").is_ok());
         assert!(validate_ref_name("").is_err());
         assert!(validate_ref_name("-D").is_err());
@@ -169,6 +189,13 @@ mod tests {
         assert!(validate_ref_name("a..b").is_err());
         assert!(validate_ref_name("a.lock").is_err());
         assert!(validate_ref_name("a@{b").is_err());
+    }
+
+    #[test]
+    fn reset_rejects_hard_and_bad_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(reset(dir.path(), "aaaa", "hard").unwrap_err().contains("不支持"));
+        assert!(reset(dir.path(), "--all", "soft").is_err());
     }
 
     #[test]
