@@ -70,7 +70,7 @@ Of course, it cannot fix bugs or other development problems for you. It only wor
 
 - **Favorites and recents**: pin frequently used projects; launched projects are ordered by recency.
 
-- **Git page (GitHub Desktop-style)**: a repo picker plus `Changes | History` tabs. Review changes in a file tree, stage/unstage (or all), discard tracked edits, read structured diffs (unified or side-by-side, line numbers, hide whitespace), and commit — with amend. History shows the commit graph and per-file diffs. Project rows keep a status chip that jumps here. Sync (fetch/pull/push) is in progress.
+- **Git page (GitHub Desktop-style)**: a repo picker plus `Changes | History` tabs. Review changes in a file tree, stage/unstage (or all), discard tracked edits, read structured diffs (unified or side-by-side, line numbers, hide whitespace), and commit — with amend. Switch, create, rename, delete and merge/rebase branches from the branch selector, and follow the commit graph with branch/tag labels and distinct merge nodes. Project rows keep a status chip that jumps here. Sync (fetch/pull/push) is in progress.
 
 ## Quick Start
 
