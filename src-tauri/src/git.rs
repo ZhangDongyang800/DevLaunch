@@ -108,7 +108,30 @@ fn hide_console(cmd: &mut Command) {
 #[cfg(not(windows))]
 fn hide_console(_cmd: &mut Command) {}
 
+/// git 子进程运行档。`allow_prompt=false` 时禁用终端提示（读取与本地写），
+/// `true` 时留给 Git Credential Manager（网络操作）。
+pub struct GitRunOpts {
+    pub allow_prompt: bool,
+    pub timeout: Duration,
+    pub stdin_data: Option<Vec<u8>>,
+}
+
+impl Default for GitRunOpts {
+    fn default() -> Self {
+        Self { allow_prompt: false, timeout: GIT_TIMEOUT, stdin_data: None }
+    }
+}
+
 pub(crate) fn run_git_with(program: &Path, dir: &Path, args: &[&str]) -> Result<String, String> {
+    run_git_with_opts(program, dir, args, GitRunOpts::default())
+}
+
+pub(crate) fn run_git_with_opts(
+    program: &Path,
+    dir: &Path,
+    args: &[&str],
+    opts: GitRunOpts,
+) -> Result<String, String> {
     let mut cmd = Command::new(program);
     cmd.arg("-C")
         .arg(dir)
@@ -118,14 +141,23 @@ pub(crate) fn run_git_with(program: &Path, dir: &Path, args: &[&str]) -> Result<
         .arg("-c")
         .arg("core.quotepath=false")
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if opts.stdin_data.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0");
+    if !opts.allow_prompt {
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+    }
     hide_console(&mut cmd);
 
     let mut child = cmd.spawn().map_err(|e| format!("启动 git 失败：{e}"))?;
+    if let Some(data) = opts.stdin_data {
+        if let Some(mut si) = child.stdin.take() {
+            use std::io::Write;
+            let _ = si.write_all(&data);
+            // si 在此 drop，关闭 stdin
+        }
+    }
     let mut out_pipe = child.stdout.take().expect("piped stdout");
     let mut err_pipe = child.stderr.take().expect("piped stderr");
     let capped = Arc::new(AtomicBool::new(false));
@@ -164,7 +196,7 @@ pub(crate) fn run_git_with(program: &Path, dir: &Path, args: &[&str]) -> Result<
                 break;
             }
             Ok(None) => {
-                if start.elapsed() >= GIT_TIMEOUT {
+                if start.elapsed() >= opts.timeout {
                     let _ = child.kill();
                     let _ = child.wait();
                     timed_out = true;
@@ -185,6 +217,13 @@ pub(crate) fn run_git_with(program: &Path, dir: &Path, args: &[&str]) -> Result<
     let err = err_handle.join().unwrap_or_default();
     let stderr = String::from_utf8_lossy(&err).into_owned();
     capped_result(out, capped.load(Ordering::SeqCst), exit_ok, timed_out, &stderr)
+}
+
+pub fn run_git_opts(dir: &Path, args: &[&str], opts: GitRunOpts) -> Result<String, String> {
+    let program = resolve_git_path().ok_or_else(|| {
+        "未找到 git.exe；请在「设置 → Git 可执行文件」指定路径，或安装 Git for Windows".to_string()
+    })?;
+    run_git_with_opts(&program, dir, args, opts)
 }
 
 fn capped_result(
