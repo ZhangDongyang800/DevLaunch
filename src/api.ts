@@ -7,6 +7,7 @@ import type {
   DetectedProject,
   FileDiff,
   GraphRow,
+  GitInfo,
   ProjectTemplate,
   RepoStatus,
 } from './types'
@@ -44,3 +45,4 @@ export const gitCommitDetail = (projectId: string, hash: string) =>
 export const gitBranches = (projectId: string) => invoke<BranchInfo[]>('git_branches', { projectId })
 export const gitFileDiff = (projectId: string, path: string, staged: boolean) =>
   invoke<FileDiff>('git_file_diff', { projectId, path, staged })
+export const getGitInfo = () => invoke<GitInfo>('get_git_info')

@@ -873,6 +873,7 @@ h1 {
 button.star { color: var(--faint); }
 button.star.on { color: var(--signal); }
 .hotkey-input { width: 150px; text-align: center; }
+.gitpath-input { width: 260px; }
 
 /* ---------- palette: drill into project items ---------- */
 

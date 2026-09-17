@@ -27,6 +27,12 @@ export interface Project {
 export interface Settings {
   autostart: boolean
   hotkey: string
+  gitPath?: string | null
+}
+
+export interface GitInfo {
+  configured: string | null
+  resolved: string | null
 }
 
 export interface AppConfig {

@@ -257,7 +257,9 @@ pub fn get_config(state: State<AppState>) -> AppConfig {
 
 #[tauri::command]
 pub fn save_config(app: AppHandle, state: State<AppState>, config: AppConfig) -> Result<(), String> {
+    let git_path = config.settings.git_path.clone();
     apply_config(&state, config)?;
+    git::set_configured_git(git_path.as_deref());
     tray::rebuild(&app);
     Ok(())
 }
@@ -460,12 +462,14 @@ pub fn import_config_from(app: AppHandle, state: State<AppState>, path: String) 
         }
     }
     backup_config_file(&state.path);
+    let git_path = cfg.settings.git_path.clone();
     if let Err(e) = apply_config(&state, cfg) {
         if new_hotkey != old_hotkey {
             let _ = crate::hotkey::register(&app, &old_hotkey);
         }
         return Err(e);
     }
+    git::set_configured_git(git_path.as_deref());
     if let Ok(mut g) = state.hotkey.lock() {
         *g = Some(new_hotkey);
     }
@@ -637,6 +641,22 @@ pub fn git_file_diff(
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
     git::file_diff(&dir, &path, staged)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitInfo {
+    pub configured: Option<String>,
+    pub resolved: Option<String>,
+}
+
+/// 设置页用：当前配置的 git 路径与实际解析结果（None = 未找到）。
+#[tauri::command]
+pub fn get_git_info() -> GitInfo {
+    GitInfo {
+        configured: git::configured_git(),
+        resolved: git::resolve_git_path().map(|p| p.display().to_string()),
+    }
 }
 
 /// Windows 路径比较归一化：统一分隔符、去尾分隔符、不区分大小写。

@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const CONFIG_VERSION: u32 = 5;
+pub const CONFIG_VERSION: u32 = 6;
 pub const MODERN_VERSION: u32 = 3;
 pub const TEMPLATE_VERSION: u32 = 3;
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+D";
@@ -55,11 +55,14 @@ pub struct Project {
 pub struct Settings {
     pub autostart: bool,
     pub hotkey: String,
+    /// 用户指定的 git.exe 绝对路径；空 = 自动检测（PATH / Program Files）。
+    #[serde(default)]
+    pub git_path: Option<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { autostart: false, hotkey: default_hotkey() }
+        Self { autostart: false, hotkey: default_hotkey(), git_path: None }
     }
 }
 
@@ -503,8 +506,8 @@ mod tests {
 
     #[test]
     fn too_new_rejected_per_file_type() {
-        assert!(parse_config(r#"{"version":6,"projects":[]}"#).is_err());
-        assert!(parse_config(r#"{"version":5,"projects":[]}"#).is_ok());
+        assert!(parse_config(r#"{"version":7,"projects":[]}"#).is_err());
+        assert!(parse_config(r#"{"version":6,"projects":[]}"#).is_ok());
         assert!(parse_template(r#"{"version":4,"name":"X","items":[]}"#).is_err());
         assert!(parse_template(r#"{"version":3,"name":"X","items":[]}"#).is_ok());
     }
@@ -521,10 +524,33 @@ mod tests {
             "items":[{"id":"i1","name":"bash项","shell":"bash","command":"npm run dev"}]}]}"#;
         let cfg = parse_config(v4).unwrap();
         assert_eq!(cfg.version, CONFIG_VERSION);
-        assert_eq!(CONFIG_VERSION, 5);
+        assert_eq!(CONFIG_VERSION, 6);
         assert!(cfg.projects[0].favorite);
         assert_eq!(cfg.projects[0].items[0].shell, Shell::Bash);
         assert_eq!(cfg.projects[0].items[0].command, "npm run dev");
+    }
+
+    #[test]
+    fn settings_git_path_defaults_none_and_serializes_camel_case() {
+        assert_eq!(Settings::default().git_path, None);
+        let mut cfg = AppConfig::default();
+        cfg.settings.git_path = Some(r"C:\Program Files\Git\cmd\git.exe".into());
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"gitPath\""), "{json}");
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.settings.git_path.as_deref(), Some(r"C:\Program Files\Git\cmd\git.exe"));
+    }
+
+    #[test]
+    fn v5_config_migrates_to_v6_preserving_items() {
+        let v5 = r#"{"version":5,"settings":{"autostart":false,"hotkey":"Ctrl+Alt+D"},
+            "projects":[{"id":"p1","name":"X","rootDir":"D:\\p","favorite":true,
+            "items":[{"id":"i1","name":"bash项","shell":"bash","command":"npm run dev"}]}]}"#;
+        let cfg = parse_config(v5).unwrap();
+        assert_eq!(cfg.version, CONFIG_VERSION);
+        assert_eq!(cfg.settings.git_path, None);
+        assert!(cfg.projects[0].favorite);
+        assert_eq!(cfg.projects[0].items[0].shell, Shell::Bash);
     }
 
     #[test]

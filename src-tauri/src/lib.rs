@@ -57,6 +57,7 @@ pub fn run() {
                 );
             }
             let hotkey_spec = cfg.settings.hotkey.clone();
+            crate::git::set_configured_git(cfg.settings.git_path.as_deref());
             app.manage(AppState { config: Mutex::new(cfg), path, hotkey: Mutex::new(Some(hotkey_spec.clone())) });
             app.handle().plugin(
                 tauri_plugin_global_shortcut::Builder::new()
@@ -128,6 +129,7 @@ pub fn run() {
             commands::git_commit_detail,
             commands::git_branches,
             commands::git_file_diff,
+            commands::get_git_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

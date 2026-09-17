@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
@@ -48,8 +48,41 @@ pub fn resolve_git_with(
     None
 }
 
+/// 用户在「设置 → Git 可执行文件」指定的路径（进程级）。空/None = 自动检测。
+static CONFIGURED_GIT: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn set_configured_git(path: Option<&str>) {
+    if let Ok(mut g) = CONFIGURED_GIT.lock() {
+        *g = path.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    }
+}
+
+pub fn configured_git() -> Option<String> {
+    CONFIGURED_GIT.lock().ok().and_then(|g| g.clone())
+}
+
+/// 解析优先级：配置路径（显式，若无效则判定缺失，不回退）→ `DEVLAUNCH_GIT_PATH`
+/// （空串 = 强制缺失）→ PATH → `%ProgramFiles%\Git\cmd|bin\git.exe`。
+pub fn resolve_git_effective(
+    configured: Option<&str>,
+    env_override: Option<&OsStr>,
+    path_env: Option<&OsStr>,
+    program_files: Option<&OsStr>,
+) -> Option<PathBuf> {
+    if let Some(c) = configured {
+        let c = c.trim();
+        if !c.is_empty() {
+            let p = PathBuf::from(c);
+            return p.is_file().then_some(p);
+        }
+    }
+    resolve_git_with(env_override, path_env, program_files)
+}
+
 pub fn resolve_git_path() -> Option<PathBuf> {
-    resolve_git_with(
+    let configured = configured_git();
+    resolve_git_effective(
+        configured.as_deref(),
         std::env::var_os("DEVLAUNCH_GIT_PATH").as_deref(),
         std::env::var_os("PATH").as_deref(),
         std::env::var_os("ProgramFiles").as_deref(),
@@ -361,14 +394,26 @@ pub fn in_progress(dir: &Path) -> Option<String> {
 }
 
 pub fn repo_status(project_id: &str, dir: &Path) -> RepoStatus {
+    let program = resolve_git_path();
+    repo_status_with(project_id, dir, program.as_deref())
+}
+
+pub fn repo_status_with(project_id: &str, dir: &Path, program: Option<&Path>) -> RepoStatus {
     if !dir.is_dir() {
         return RepoStatus::errored(project_id, format!("目录不存在：{}", dir.display()));
     }
+    // 缺 git.exe 必须是「错误」，不能与「非仓库」混为一谈。
+    let Some(program) = program else {
+        return RepoStatus::errored(
+            project_id,
+            "未找到 git.exe；请在「设置 → Git 可执行文件」指定路径，或安装 Git for Windows".into(),
+        );
+    };
     // Locale-independent work-tree check; erroring here means "not a repo".
-    if run_git(dir, &["rev-parse", "--is-inside-work-tree"]).is_err() {
+    if run_git_with(program, dir, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return RepoStatus::not_repo(project_id);
     }
-    match run_git(dir, &["--no-optional-locks", "status", "--porcelain=v2", "--branch"]) {
+    match run_git_with(program, dir, &["--no-optional-locks", "status", "--porcelain=v2", "--branch"]) {
         Ok(text) => {
             let mut st = parse_status(project_id, &text);
             st.operation = in_progress(dir);
@@ -1018,5 +1063,43 @@ mod tests {
         let got = file_diff_untracked(&f).unwrap();
         assert!(got.truncated);
         assert!(got.text.len() <= 256 * 1024);
+    }
+
+    #[test]
+    fn resolve_git_effective_configured_wins_and_invalid_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("git.exe");
+        std::fs::write(&good, "x").unwrap();
+
+        let other = tempfile::tempdir().unwrap();
+        let path_git = other.path().join("git.exe");
+        std::fs::write(&path_git, "x").unwrap();
+        let joined = std::env::join_paths([other.path()]).unwrap();
+
+        // configured 有效：优先使用，即使 PATH 也有
+        let got = resolve_git_effective(Some(good.to_str().unwrap()), None, Some(joined.as_os_str()), None);
+        assert_eq!(got.as_deref(), Some(good.as_path()));
+
+        // configured 无效：判定缺失，不回退到 PATH
+        let missing = dir.path().join("nope.exe");
+        assert_eq!(resolve_git_effective(Some(missing.to_str().unwrap()), None, Some(joined.as_os_str()), None), None);
+
+        // configured 空 / None：回退 PATH
+        assert_eq!(
+            resolve_git_effective(Some("  "), None, Some(joined.as_os_str()), None).as_deref(),
+            Some(path_git.as_path())
+        );
+        assert_eq!(
+            resolve_git_effective(None, None, Some(joined.as_os_str()), None).as_deref(),
+            Some(path_git.as_path())
+        );
+    }
+
+    #[test]
+    fn repo_status_without_git_reports_missing_not_non_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = repo_status_with("p1", dir.path(), None);
+        assert!(!st.is_repo);
+        assert!(st.error.unwrap().contains("未找到 git.exe"));
     }
 }

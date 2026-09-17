@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { config } from '../store'
-import { exportConfigTo, getAutostart, getConfig, importConfigFrom, setAutostart, setHotkey } from '../api'
+import { config, persist } from '../store'
+import { exportConfigTo, getAutostart, getConfig, getGitInfo, importConfigFrom, setAutostart, setHotkey } from '../api'
+import type { GitInfo } from '../types'
 
 const emit = defineEmits<{ notify: [msg: string, kind?: 'ok' | 'err'] }>()
 
 const autostart = ref(false)
+const gitPath = ref('')
+const gitInfo = ref<GitInfo>({ configured: null, resolved: null })
 
 onMounted(async () => {
   try {
@@ -13,7 +16,48 @@ onMounted(async () => {
   } catch {
     autostart.value = false
   }
+  await loadGitInfo()
 })
+
+async function loadGitInfo() {
+  try {
+    gitInfo.value = await getGitInfo()
+  } catch {
+    gitInfo.value = { configured: null, resolved: null }
+  }
+  gitPath.value = config.value?.settings.gitPath ?? ''
+}
+
+async function saveGitPath(path: string) {
+  if (!config.value) return
+  const trimmed = path.trim()
+  config.value.settings.gitPath = trimmed ? trimmed : null
+  try {
+    await persist()
+    await loadGitInfo()
+    emit('notify', gitInfo.value.resolved ? '已找到 git.exe' : '未找到 git.exe，请确认路径或留空自动检测')
+  } catch (e) {
+    emit('notify', `保存失败：${e}`, 'err')
+  }
+}
+
+function onGitPathChange(e: Event) {
+  void saveGitPath((e.target as HTMLInputElement).value)
+}
+
+async function browseGit() {
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const picked = await open({ multiple: false, filters: [{ name: 'git.exe', extensions: ['exe'] }] })
+  if (typeof picked === 'string') {
+    gitPath.value = picked
+    await saveGitPath(picked)
+  }
+}
+
+function clearGit() {
+  gitPath.value = ''
+  void saveGitPath('')
+}
 
 async function toggleAutostart() {
   try {
@@ -161,6 +205,24 @@ onUnmounted(() => window.removeEventListener('keydown', onRecordKeydown, true))
         <button v-if="!recording" class="ghost" @click="startRecording">录制</button>
         <button v-else class="ghost" @click="stopRecording">取消</button>
         <button class="ghost" @click="resetHotkey">恢复默认</button>
+      </div>
+
+      <div class="list-row">
+        <div class="set-info">
+          <div class="set-title">Git 可执行文件</div>
+          <div class="set-sub">
+            {{ gitInfo.resolved ? `已找到：${gitInfo.resolved}` : '未找到；留空则自动检测 PATH / Program Files' }}
+          </div>
+        </div>
+        <input
+          class="inline mono gitpath-input"
+          :value="gitPath"
+          placeholder="自动检测"
+          spellcheck="false"
+          @change="onGitPathChange"
+        />
+        <button class="ghost" @click="browseGit">选择…</button>
+        <button class="ghost" @click="clearGit">清除</button>
       </div>
 
       <div class="list-row">
