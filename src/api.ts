@@ -43,6 +43,16 @@ export const gitLog = (projectId: string, limit?: number, skip?: number) =>
 export const gitCommitDetail = (projectId: string, hash: string) =>
   invoke<CommitDetail>('git_commit_detail', { projectId, hash })
 export const gitBranches = (projectId: string) => invoke<BranchInfo[]>('git_branches', { projectId })
-export const gitFileDiff = (projectId: string, path: string, staged: boolean) =>
-  invoke<FileDiff>('git_file_diff', { projectId, path, staged })
+export const gitFileDiff = (
+  projectId: string,
+  path: string,
+  staged: boolean,
+  ignoreWhitespace: boolean,
+  fullContext: boolean,
+) => invoke<FileDiff>('git_file_diff', { projectId, path, staged, ignoreWhitespace, fullContext })
+export const gitStage = (projectId: string, paths: string[]) => invoke<void>('git_stage', { projectId, paths })
+export const gitUnstage = (projectId: string, paths: string[]) => invoke<void>('git_unstage', { projectId, paths })
+export const gitDiscard = (projectId: string, paths: string[]) => invoke<void>('git_discard', { projectId, paths })
+export const gitCommit = (projectId: string, message: string, amend: boolean) =>
+  invoke<string>('git_commit', { projectId, message, amend })
 export const getGitInfo = () => invoke<GitInfo>('get_git_info')

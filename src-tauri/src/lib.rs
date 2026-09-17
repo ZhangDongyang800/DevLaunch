@@ -18,6 +18,7 @@ pub struct AppState {
     pub config: Mutex<AppConfig>,
     pub path: PathBuf,
     pub hotkey: Mutex<Option<String>>,
+    pub git_op: Mutex<()>,
 }
 
 fn toggle_palette(app: &AppHandle) {
@@ -59,7 +60,7 @@ pub fn run() {
             }
             let hotkey_spec = cfg.settings.hotkey.clone();
             crate::git::set_configured_git(cfg.settings.git_path.as_deref());
-            app.manage(AppState { config: Mutex::new(cfg), path, hotkey: Mutex::new(Some(hotkey_spec.clone())) });
+            app.manage(AppState { config: Mutex::new(cfg), path, hotkey: Mutex::new(Some(hotkey_spec.clone())), git_op: Mutex::new(()) });
             app.handle().plugin(
                 tauri_plugin_global_shortcut::Builder::new()
                     .with_handler(|app, _shortcut, event| {
@@ -130,6 +131,10 @@ pub fn run() {
             commands::git_commit_detail,
             commands::git_branches,
             commands::git_file_diff,
+            commands::git_stage,
+            commands::git_unstage,
+            commands::git_discard,
+            commands::git_commit,
             commands::get_git_info,
         ])
         .run(tauri::generate_context!())

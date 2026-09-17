@@ -75,6 +75,7 @@ mod tests {
             config: std::sync::Mutex::new(initial.clone()),
             path,
             hotkey: std::sync::Mutex::new(None),
+            git_op: std::sync::Mutex::new(()),
         };
         let mut next = AppConfig::default();
         next.projects.push(sample_project("p1"));
@@ -643,6 +644,42 @@ pub fn git_file_diff(
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
     git::file_diff(&dir, &path, staged, ignore_whitespace, full_context)
+}
+
+fn git_lock<'a>(state: &'a State<'_, AppState>) -> Result<std::sync::MutexGuard<'a, ()>, String> {
+    state.git_op.try_lock().map_err(|_| "已有 Git 操作进行中，请稍候".to_string())
+}
+
+#[tauri::command(async)]
+pub fn git_stage(state: State<'_, AppState>, project_id: String, paths: Vec<String>) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::stage(&dir, &paths)
+}
+
+#[tauri::command(async)]
+pub fn git_unstage(state: State<'_, AppState>, project_id: String, paths: Vec<String>) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::unstage(&dir, &paths)
+}
+
+#[tauri::command(async)]
+pub fn git_discard(state: State<'_, AppState>, project_id: String, paths: Vec<String>) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::discard(&dir, &paths)
+}
+
+#[tauri::command(async)]
+pub fn git_commit(state: State<'_, AppState>, project_id: String, message: String, amend: bool) -> Result<String, String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::commit(&dir, &message, amend)
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -99,12 +99,29 @@ export interface BranchInfo {
   behind: number
 }
 
+export interface DiffLine {
+  kind: 'context' | 'add' | 'del'
+  oldNo: number | null
+  newNo: number | null
+  text: string
+}
+
+export interface Hunk {
+  header: string
+  oldStart: number
+  newStart: number
+  lines: DiffLine[]
+}
+
 export interface FileDiff {
   path: string
   staged: boolean
   untracked: boolean
+  binary: boolean
   truncated: boolean
-  text: string
+  additions: number
+  deletions: number
+  hunks: Hunk[]
 }
 
 export interface Commit {
@@ -135,8 +152,10 @@ export interface GraphRow {
 export interface CommitDetail {
   hash: string
   stat: string
-  patch: string
+  additions: number
+  deletions: number
   truncated: boolean
+  files: FileDiff[]
 }
 
 export type ToastKind = 'ok' | 'err'
