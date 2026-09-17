@@ -682,6 +682,69 @@ pub fn git_commit(state: State<'_, AppState>, project_id: String, message: Strin
     crate::git_write::commit(&dir, &message, amend)
 }
 
+#[tauri::command(async)]
+pub fn git_switch_branch(state: State<'_, AppState>, project_id: String, name: String) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::switch_branch(&dir, &name)
+}
+
+#[tauri::command(async)]
+pub fn git_create_branch(
+    state: State<'_, AppState>,
+    project_id: String,
+    name: String,
+    checkout: bool,
+) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::create_branch(&dir, &name, checkout)
+}
+
+#[tauri::command(async)]
+pub fn git_delete_branch(
+    state: State<'_, AppState>,
+    project_id: String,
+    name: String,
+    force: bool,
+) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::delete_branch(&dir, &name, force)
+}
+
+#[tauri::command(async)]
+pub fn git_rename_branch(
+    state: State<'_, AppState>,
+    project_id: String,
+    old_name: String,
+    new_name: String,
+) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::rename_branch(&dir, &old_name, &new_name)
+}
+
+#[tauri::command(async)]
+pub fn git_merge(state: State<'_, AppState>, project_id: String, name: String) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::merge(&dir, &name)
+}
+
+#[tauri::command(async)]
+pub fn git_rebase(state: State<'_, AppState>, project_id: String, onto: String) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    crate::git_write::rebase(&dir, &onto)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitInfo {

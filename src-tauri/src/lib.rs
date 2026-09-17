@@ -135,6 +135,12 @@ pub fn run() {
             commands::git_unstage,
             commands::git_discard,
             commands::git_commit,
+            commands::git_switch_branch,
+            commands::git_create_branch,
+            commands::git_delete_branch,
+            commands::git_rename_branch,
+            commands::git_merge,
+            commands::git_rebase,
             commands::get_git_info,
         ])
         .run(tauri::generate_context!())

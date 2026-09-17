@@ -467,6 +467,7 @@ pub fn repo_status_with(project_id: &str, dir: &Path, program: Option<&Path>) ->
 pub struct BranchInfo {
     pub name: String,
     pub current: bool,
+    pub remote: bool,
     pub upstream: Option<String>,
     pub ahead: u32,
     pub behind: u32,
@@ -474,7 +475,8 @@ pub struct BranchInfo {
 
 /// 解析 `for-each-ref --format=%(refname:short)%x1f%(upstream:short)%x1f%(upstream:track)`。
 pub fn parse_branches(text: &str, current: Option<&str>) -> Vec<BranchInfo> {
-    text.split('\n')
+    let mut out: Vec<BranchInfo> = text
+        .split('\n')
         .map(str::trim_end)
         .filter(|l| !l.is_empty())
         .map(|line| {
@@ -497,16 +499,37 @@ pub fn parse_branches(text: &str, current: Option<&str>) -> Vec<BranchInfo> {
             BranchInfo {
                 current: current == Some(name.as_str()),
                 name,
+                remote: false,
                 upstream: if upstream.is_empty() { None } else { Some(upstream.to_string()) },
                 ahead,
                 behind,
             }
         })
+        .collect();
+    // 本地分支排在远程前面。
+    out.sort_by(|a, b| (a.remote, &a.name).cmp(&(b.remote, &b.name)));
+    out
+}
+
+/// 解析 `for-each-ref refs/remotes`（`name` 形如 `origin/main`；过滤 `*/HEAD`）。
+pub fn parse_remote_branches(text: &str) -> Vec<BranchInfo> {
+    text.split('\n')
+        .map(str::trim_end)
+        .filter(|l| !l.is_empty())
+        .filter(|l| !l.ends_with("/HEAD"))
+        .map(|name| BranchInfo {
+            name: name.to_string(),
+            current: false,
+            remote: true,
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+        })
         .collect()
 }
 
 pub fn branches(dir: &Path) -> Result<Vec<BranchInfo>, String> {
-    let text = run_git(
+    let locals = run_git(
         dir,
         &[
             "for-each-ref",
@@ -515,7 +538,11 @@ pub fn branches(dir: &Path) -> Result<Vec<BranchInfo>, String> {
         ],
     )?;
     let current = run_git(dir, &["symbolic-ref", "--short", "HEAD"]).ok();
-    Ok(parse_branches(&text, current.as_deref().map(str::trim)))
+    let mut out = parse_branches(&locals, current.as_deref().map(str::trim));
+    if let Ok(remotes) = run_git(dir, &["for-each-ref", "refs/remotes", "--format=%(refname:short)"]) {
+        out.extend(parse_remote_branches(&remotes));
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1253,12 +1280,26 @@ mod tests {
         let text = "main\x1forigin/main\x1f[ahead 2, behind 1]\nfeature\x1f\x1f\ndev\x1forigin/dev\x1f[gone]\n";
         let got = parse_branches(text, Some("main"));
         assert_eq!(got.len(), 3);
-        assert!(got[0].current);
-        assert_eq!(got[0].upstream.as_deref(), Some("origin/main"));
-        assert_eq!((got[0].ahead, got[0].behind), (2, 1));
-        assert_eq!(got[1].upstream, None);
-        assert!(!got[1].current);
-        assert_eq!((got[2].ahead, got[2].behind), (0, 0));
+        let find = |n: &str| got.iter().find(|b| b.name == n).unwrap();
+        let main = find("main");
+        assert!(main.current);
+        assert!(!main.remote);
+        assert_eq!(main.upstream.as_deref(), Some("origin/main"));
+        assert_eq!((main.ahead, main.behind), (2, 1));
+        let feature = find("feature");
+        assert_eq!(feature.upstream, None);
+        assert!(!feature.current);
+        let dev = find("dev");
+        assert_eq!((dev.ahead, dev.behind), (0, 0));
+    }
+
+    #[test]
+    fn parse_remote_branches_filters_head() {
+        let got = parse_remote_branches("origin/main\norigin/HEAD\nupstream/dev\n");
+        assert_eq!(got.len(), 2);
+        assert!(got.iter().all(|b| b.remote));
+        assert!(got.iter().any(|b| b.name == "origin/main"));
+        assert!(got.iter().all(|b| b.name != "origin/HEAD"));
     }
 
     #[test]

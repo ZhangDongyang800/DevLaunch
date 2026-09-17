@@ -69,6 +69,67 @@ pub fn commit(dir: &Path, message: &str, amend: bool) -> Result<String, String> 
     Ok(run_git(dir, &["rev-parse", "HEAD"])?.trim().to_string())
 }
 
+/// 分支名校验（git check-ref-format 的核心规则，拒绝 `--option` 注入）。
+pub fn validate_ref_name(name: &str) -> Result<(), String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Err("分支名为空".into());
+    }
+    let bad = n.starts_with('-')
+        || n.starts_with('.')
+        || n.ends_with('.')
+        || n.ends_with(".lock")
+        || n.contains("..")
+        || n.contains("@{")
+        || n.chars().any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c));
+    if bad {
+        return Err(format!("非法分支名：{n}"));
+    }
+    Ok(())
+}
+
+/// merge/rebase 失败后若仓库进入冲突态，返回可读的中文提示。
+fn conflict_or(dir: &Path, err: String) -> String {
+    if crate::git::in_progress(dir).is_some() {
+        "操作产生冲突，请在终端解决后再回到这里（未完成的合并/rebase 会在这里提示）".into()
+    } else {
+        err
+    }
+}
+
+pub fn switch_branch(dir: &Path, name: &str) -> Result<(), String> {
+    validate_ref_name(name)?;
+    run_write(dir, &["switch", name.trim()]).map(|_| ())
+}
+
+pub fn create_branch(dir: &Path, name: &str, checkout: bool) -> Result<(), String> {
+    validate_ref_name(name)?;
+    let args = if checkout { vec!["switch", "-c", name.trim()] } else { vec!["branch", name.trim()] };
+    run_write(dir, &args).map(|_| ())
+}
+
+pub fn delete_branch(dir: &Path, name: &str, force: bool) -> Result<(), String> {
+    validate_ref_name(name)?;
+    let flag = if force { "-D" } else { "-d" };
+    run_write(dir, &["branch", flag, name.trim()]).map(|_| ())
+}
+
+pub fn rename_branch(dir: &Path, old: &str, new: &str) -> Result<(), String> {
+    validate_ref_name(old)?;
+    validate_ref_name(new)?;
+    run_write(dir, &["branch", "-m", old.trim(), new.trim()]).map(|_| ())
+}
+
+pub fn merge(dir: &Path, name: &str) -> Result<(), String> {
+    validate_ref_name(name)?;
+    run_write(dir, &["merge", name.trim()]).map(|_| ()).map_err(|e| conflict_or(dir, e))
+}
+
+pub fn rebase(dir: &Path, onto: &str) -> Result<(), String> {
+    validate_ref_name(onto)?;
+    run_write(dir, &["rebase", onto.trim()]).map(|_| ()).map_err(|e| conflict_or(dir, e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,6 +157,18 @@ mod tests {
         assert!(validate_paths(&[]).is_err());
         assert!(validate_paths(&["".into()]).is_err());
         assert!(validate_paths(&["a.txt".into()]).is_ok());
+    }
+
+    #[test]
+    fn validate_ref_name_matrix() {
+        assert!(validate_ref_name("feature/x").is_ok());
+        assert!(validate_ref_name("main").is_ok());
+        assert!(validate_ref_name("").is_err());
+        assert!(validate_ref_name("-D").is_err());
+        assert!(validate_ref_name("a b").is_err());
+        assert!(validate_ref_name("a..b").is_err());
+        assert!(validate_ref_name("a.lock").is_err());
+        assert!(validate_ref_name("a@{b").is_err());
     }
 
     #[test]
