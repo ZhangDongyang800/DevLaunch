@@ -70,7 +70,7 @@ npm run dev
 
 - **收藏与最近使用**：常用项目可收藏置顶，启动过的项目按最近时间排序。
 
-- **Git 页（GitHub Desktop 形态）**：顶部仓库选择 + `Changes | History` 两个 Tab。Changes 显示已暂存 / 未暂存 / 未跟踪文件与逐文件差异；History 显示提交图、列表与差异。项目行保留状态 chip，点击跳转。当前为只读，提交与同步在推进中。
+- **Git 页（GitHub Desktop 形态）**：顶部仓库选择 + `Changes | History` 两个 Tab。Changes 用文件树展示改动，可暂存 / 取消暂存（含全部）、丢弃已跟踪文件的修改，并以结构化 diff 查看（统一 / 左右对比、行号、隐藏空白），支持提交（含 amend）；History 显示提交图与逐文件差异。项目行保留状态 chip，点击跳转。同步（fetch/pull/push）在推进中。
 
 ## 快速开始
 
