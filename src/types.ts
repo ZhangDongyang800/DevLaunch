@@ -94,6 +94,7 @@ export interface RepoStatus {
 export interface BranchInfo {
   name: string
   current: boolean
+  remote: boolean
   upstream: string | null
   ahead: number
   behind: number

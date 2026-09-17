@@ -55,4 +55,14 @@ export const gitUnstage = (projectId: string, paths: string[]) => invoke<void>('
 export const gitDiscard = (projectId: string, paths: string[]) => invoke<void>('git_discard', { projectId, paths })
 export const gitCommit = (projectId: string, message: string, amend: boolean) =>
   invoke<string>('git_commit', { projectId, message, amend })
+export const gitSwitchBranch = (projectId: string, name: string) =>
+  invoke<void>('git_switch_branch', { projectId, name })
+export const gitCreateBranch = (projectId: string, name: string, checkout: boolean) =>
+  invoke<void>('git_create_branch', { projectId, name, checkout })
+export const gitDeleteBranch = (projectId: string, name: string, force: boolean) =>
+  invoke<void>('git_delete_branch', { projectId, name, force })
+export const gitRenameBranch = (projectId: string, oldName: string, newName: string) =>
+  invoke<void>('git_rename_branch', { projectId, oldName, newName })
+export const gitMerge = (projectId: string, name: string) => invoke<void>('git_merge', { projectId, name })
+export const gitRebase = (projectId: string, onto: string) => invoke<void>('git_rebase', { projectId, onto })
 export const getGitInfo = () => invoke<GitInfo>('get_git_info')

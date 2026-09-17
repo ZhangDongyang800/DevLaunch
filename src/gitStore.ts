@@ -1,6 +1,20 @@
 import { ref } from 'vue'
 import type { BranchInfo, GraphRow, RepoStatus } from './types'
-import { gitBranches, gitCommit, gitDiscard, gitLog, gitStage, gitStatuses, gitUnstage } from './api'
+import {
+  gitBranches,
+  gitCommit,
+  gitCreateBranch,
+  gitDeleteBranch,
+  gitDiscard,
+  gitLog,
+  gitMerge,
+  gitRebase,
+  gitRenameBranch,
+  gitStage,
+  gitStatuses,
+  gitSwitchBranch,
+  gitUnstage,
+} from './api'
 
 export const statuses = ref<Record<string, RepoStatus>>({})
 export const branches = ref<Record<string, BranchInfo[]>>({})
@@ -78,3 +92,13 @@ export const unstage = (projectId: string, paths: string[]) => runWrite(projectI
 export const discard = (projectId: string, paths: string[]) => runWrite(projectId, () => gitDiscard(projectId, paths))
 export const commit = (projectId: string, message: string, amend: boolean) =>
   runWrite(projectId, () => gitCommit(projectId, message, amend))
+
+export const switchBranch = (projectId: string, name: string) => runWrite(projectId, () => gitSwitchBranch(projectId, name))
+export const createBranch = (projectId: string, name: string, checkout: boolean) =>
+  runWrite(projectId, () => gitCreateBranch(projectId, name, checkout))
+export const deleteBranch = (projectId: string, name: string, force: boolean) =>
+  runWrite(projectId, () => gitDeleteBranch(projectId, name, force))
+export const renameBranch = (projectId: string, oldName: string, newName: string) =>
+  runWrite(projectId, () => gitRenameBranch(projectId, oldName, newName))
+export const mergeBranch = (projectId: string, name: string) => runWrite(projectId, () => gitMerge(projectId, name))
+export const rebaseBranch = (projectId: string, onto: string) => runWrite(projectId, () => gitRebase(projectId, onto))

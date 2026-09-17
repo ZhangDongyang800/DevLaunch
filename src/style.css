@@ -1011,6 +1011,9 @@ button.star.on { color: var(--signal); }
 .gtb-field { display: flex; align-items: center; gap: 6px; }
 .gtb-label { color: var(--faint); font-size: 10.5px; letter-spacing: 0.08em; }
 .gtb-branch { color: var(--signal); font-size: 12.5px; }
+.gtb-actions { display: flex; align-items: center; gap: 2px; }
+.branch-form { display: flex; align-items: center; gap: 8px; padding: 4px 0 6px; flex-wrap: wrap; }
+.branch-form input.inline { min-width: 180px; }
 .git-op-banner {
   margin: 6px 0;
   padding: 6px 10px;
@@ -1062,6 +1065,17 @@ button.star.on { color: var(--signal); }
 .gt-subject { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gt-author { color: var(--faint); flex-shrink: 0; }
 .gt-time { color: var(--faint); flex-shrink: 0; }
+
+.gt-ref {
+  flex-shrink: 0;
+  color: var(--signal);
+  border: 1px solid var(--signal-border);
+  background: var(--signal-dim);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+  font-size: 10.5px;
+}
+.gt-ref.head { color: #062312; background: var(--signal); border-color: var(--signal); }
 
 .git-patch { margin: 0; padding: 8px; font-size: 11px; line-height: 1.5; color: var(--text); white-space: pre; }
 .gt-truncated { padding: 6px 8px; color: #e0b341; font-size: 11.5px; }

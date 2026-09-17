@@ -92,6 +92,7 @@ function relTime(iso: string): string {
               @click="select(r.commit.hash)"
             >
               <span class="gt-hash mono">{{ r.commit.short }}</span>
+              <span v-for="ref in r.commit.refs" :key="ref" class="gt-ref mono" :class="{ head: ref.includes('HEAD') }">{{ ref }}</span>
               <span class="gt-subject">{{ r.commit.subject }}</span>
               <span class="gt-author">{{ r.commit.author }}</span>
               <span class="gt-time">{{ relTime(r.commit.date) }}</span>

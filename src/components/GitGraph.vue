@@ -58,11 +58,25 @@ function stroke(lane: number) {
         stroke-width="1.5"
       />
       <circle
+        v-if="r.commit.parents.length > 1"
+        :cx="x(r.lane)"
+        :cy="y(i)"
+        :r="selected === r.commit.hash ? 5 : 4"
+        fill="var(--panel)"
+        :stroke="stroke(r.color)"
+        stroke-width="2"
+      >
+        <title>{{ r.commit.short }} · merge · {{ r.commit.subject }} — {{ r.commit.author }}</title>
+      </circle>
+      <circle
+        v-else
         :cx="x(r.lane)"
         :cy="y(i)"
         :r="selected === r.commit.hash ? 4.5 : 3.5"
         :fill="stroke(r.color)"
-      />
+      >
+        <title>{{ r.commit.short }} · {{ r.commit.subject }} — {{ r.commit.author }}</title>
+      </circle>
     </template>
   </svg>
 </template>
