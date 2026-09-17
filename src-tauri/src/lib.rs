@@ -2,6 +2,7 @@ pub mod commands;
 pub mod config;
 pub mod detect;
 pub mod git;
+pub mod git_write;
 pub mod hotkey;
 pub mod launcher;
 pub mod platform;
