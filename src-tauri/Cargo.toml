@@ -1,6 +1,6 @@
 [package]
 name = "devlaunch"
-version = "0.0.3"
+version = "0.0.4"
 description = "One-click launcher for Windows dev project startup"
 authors = ["ZhangDongyang800"]
 edition = "2021"
