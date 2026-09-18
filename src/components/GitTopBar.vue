@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Project, RepoStatus } from '../types'
 import {
   branches,
@@ -33,11 +33,6 @@ const currentBranch = computed(() => list.value.find((b) => b.current)?.name ?? 
 const operation = computed(() => status.value?.operation ?? '')
 const blocked = computed(() => !!operation.value || busy.value)
 
-const mode = ref<'' | 'new' | 'rename' | 'delete' | 'merge' | 'rebase'>('')
-const input = ref('')
-const checkout = ref(true)
-const force = ref(false)
-
 const ahead = computed(() => status.value?.ahead ?? 0)
 const behind = computed(() => status.value?.behind ?? 0)
 const hasUpstream = computed(() => !!locals.value.find((b) => b.current)?.upstream)
@@ -54,6 +49,54 @@ const lastFetchText = computed(() => {
   return `${Math.floor(d / day)} 天前`
 })
 
+// ---- 仓库选择器（自定义：名称 + 路径 + 最近使用排序 + 搜索）----
+const repoOpen = ref(false)
+const repoQuery = ref('')
+const repoSearch = ref<HTMLInputElement>()
+
+const sortedProjects = computed(() =>
+  [...props.projects].sort((a, b) => (b.lastLaunchedAt ?? 0) - (a.lastLaunchedAt ?? 0)),
+)
+const filteredProjects = computed(() => {
+  const q = repoQuery.value.trim().toLowerCase()
+  if (!q) return sortedProjects.value
+  return sortedProjects.value.filter(
+    (p) => (p.name || '').toLowerCase().includes(q) || p.rootDir.toLowerCase().includes(q),
+  )
+})
+
+watch(repoOpen, async (open) => {
+  if (open) {
+    await nextTick()
+    repoSearch.value?.focus()
+  }
+})
+
+function pickRepo(id: string) {
+  selectedRepoId.value = id
+  repoOpen.value = false
+  repoQuery.value = ''
+  void refreshRepo(id)
+  void loadLastFetch(id)
+}
+
+function closeRepo() {
+  repoOpen.value = false
+}
+
+onMounted(() => document.addEventListener('click', closeRepo))
+onUnmounted(() => document.removeEventListener('click', closeRepo))
+
+function dirty(p: Project) {
+  const s = statuses.value[p.id]
+  return s ? s.staged + s.unstaged + s.untracked : 0
+}
+
+const mode = ref<'' | 'new' | 'rename' | 'delete' | 'merge' | 'rebase'>('')
+const input = ref('')
+const checkout = ref(true)
+const force = ref(false)
+
 onMounted(() => {
   if (selectedRepoId.value) void loadLastFetch(selectedRepoId.value)
 })
@@ -61,49 +104,6 @@ onMounted(() => {
 watch(selectedRepoId, (id) => {
   if (id) void loadLastFetch(id)
 })
-
-async function doFetch() {
-  if (!selected.value) return
-  try {
-    await fetchRemote(selected.value.id)
-    await loadLastFetch(selected.value.id)
-    emit('notify', '已 fetch origin')
-  } catch (e) {
-    emit('notify', `${e}`, 'err')
-  }
-}
-
-async function doPull() {
-  if (!selected.value || blocked.value) return
-  const { confirm } = await import('@tauri-apps/plugin-dialog')
-  if (!(await confirm('Pull 会拉取并可能合并远程改动，继续？', { title: 'Pull', kind: 'warning' }))) return
-  try {
-    await pullRemote(selected.value.id)
-    emit('notify', '已 pull')
-  } catch (e) {
-    emit('notify', `${e}`, 'err')
-  }
-}
-
-async function doPush() {
-  if (!selected.value || !canPush.value) return
-  try {
-    const r = await pushRemote(selected.value.id)
-    emit('notify', r.setUpstream ? `已推送并设置 upstream（${r.branch}）` : '已推送')
-  } catch (e) {
-    emit('notify', `${e}`, 'err')
-  }
-}
-
-function dirty(p: Project) {
-  const s = statuses.value[p.id]
-  return s ? s.staged + s.unstaged + s.untracked : 0
-}
-
-function onRepoChange(e: Event) {
-  selectedRepoId.value = (e.target as HTMLSelectElement).value
-  void refreshRepo(selectedRepoId.value)
-}
 
 async function confirmDirty() {
   if (!selected.value) return true
@@ -118,7 +118,6 @@ async function confirmDirty() {
 async function onBranchChange(e: Event) {
   const value = (e.target as HTMLSelectElement).value
   if (!selected.value || blocked.value) return
-  // 还原选择（实际由 store 刷新后回填）
   if (value.startsWith('remote:')) {
     const remoteName = value.slice('remote:'.length)
     const short = remoteName.split('/').slice(1).join('/')
@@ -192,6 +191,39 @@ function open(m: typeof mode.value) {
   force.value = false
 }
 
+async function doFetch() {
+  if (!selected.value) return
+  try {
+    await fetchRemote(selected.value.id)
+    await loadLastFetch(selected.value.id)
+    emit('notify', '已 fetch origin')
+  } catch (e) {
+    emit('notify', `${e}`, 'err')
+  }
+}
+
+async function doPull() {
+  if (!selected.value || blocked.value) return
+  const { confirm } = await import('@tauri-apps/plugin-dialog')
+  if (!(await confirm('Pull 会拉取并可能合并远程改动，继续？', { title: 'Pull', kind: 'warning' }))) return
+  try {
+    await pullRemote(selected.value.id)
+    emit('notify', '已 pull')
+  } catch (e) {
+    emit('notify', `${e}`, 'err')
+  }
+}
+
+async function doPush() {
+  if (!selected.value || !canPush.value) return
+  try {
+    const r = await pushRemote(selected.value.id)
+    emit('notify', r.setUpstream ? `已推送并设置 upstream（${r.branch}）` : '已推送')
+  } catch (e) {
+    emit('notify', `${e}`, 'err')
+  }
+}
+
 async function refreshAll() {
   await refreshStatuses(props.projects.map((p) => p.id))
   if (selectedRepoId.value) {
@@ -203,14 +235,32 @@ async function refreshAll() {
 
 <template>
   <div class="git-topbar">
-    <label class="gtb-field">
+    <div class="gtb-field gtb-repo" @click.stop>
       <span class="gtb-label">仓库</span>
-      <select :value="selectedRepoId" @change="onRepoChange">
-        <option v-for="p in projects" :key="p.id" :value="p.id">
-          {{ p.name || '未命名项目' }}{{ dirty(p) ? ` ●${dirty(p)}` : '' }}
-        </option>
-      </select>
-    </label>
+      <button class="gtb-repo-btn" :title="selected?.rootDir || ''" @click="repoOpen = !repoOpen">
+        <span class="gtb-repo-name">{{ selected ? (selected.name || '未命名项目') : '选择仓库' }}</span>
+        <span class="gb-caret">▾</span>
+      </button>
+      <div v-if="repoOpen" class="repo-pop">
+        <input ref="repoSearch" v-model="repoQuery" class="mono repo-search" placeholder="搜索名称 / 路径…" spellcheck="false" />
+        <div class="repo-list">
+          <div
+            v-for="p in filteredProjects"
+            :key="p.id"
+            class="repo-item"
+            :class="{ active: p.id === selectedRepoId }"
+            @click="pickRepo(p.id)"
+          >
+            <div class="repo-item-head">
+              <span class="repo-item-name">{{ p.name || '未命名项目' }}</span>
+              <span v-if="dirty(p)" class="gb-dirty mono">●{{ dirty(p) }}</span>
+            </div>
+            <div class="repo-item-path mono">{{ p.rootDir || '未设置根目录' }}</div>
+          </div>
+          <div v-if="filteredProjects.length === 0" class="gc-empty">无匹配仓库</div>
+        </div>
+      </div>
+    </div>
 
     <label class="gtb-field">
       <span class="gtb-label">分支</span>
@@ -238,13 +288,13 @@ async function refreshAll() {
       <button class="ghost" :disabled="blocked || behind === 0" :title="`Pull ${behind} 个提交`" @click="doPull">
         ↓ Pull<template v-if="behind"> {{ behind }}</template>
       </button>
-      <button class="ghost" :disabled="!canPush" :title="'Push 到远程'" @click="doPush">
+      <button class="ghost" :disabled="!canPush" title="Push 到远程" @click="doPush">
         ↑ Push<template v-if="ahead"> {{ ahead }}</template>
       </button>
     </span>
     <span class="gtb-last mono">上次拉取 {{ lastFetchText }}</span>
     <span v-if="busy" class="commit-busy">处理中…</span>
-    <button class="bordered" @click="refreshAll">刷新</button>
+    <button class="ghost" title="刷新（Ctrl+R）" @click="refreshAll">⟳</button>
   </div>
 
   <div v-if="mode" class="branch-form">

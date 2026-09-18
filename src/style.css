@@ -1034,6 +1034,60 @@ button.star.on { color: var(--signal); }
 .branch-form { display: flex; align-items: center; gap: 8px; padding: 4px 0 6px; flex-wrap: wrap; }
 .branch-form input.inline { min-width: 180px; }
 .gtb-last { color: var(--faint); font-size: 10.5px; }
+
+/* ---------- repo picker ---------- */
+
+.gtb-repo { position: relative; }
+.gtb-repo-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  max-width: 260px;
+}
+.gtb-repo-btn:hover { border-color: var(--border-strong); }
+.gtb-repo-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gb-caret { color: var(--faint); font-size: 9px; }
+.repo-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  width: 340px;
+  background: var(--elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  padding: 6px;
+}
+.repo-search {
+  width: 100%;
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.repo-search:focus { border-color: var(--signal-border); outline: none; }
+.repo-list { max-height: 300px; overflow: auto; }
+.repo-item { padding: 5px 7px; border-radius: var(--radius-sm); cursor: pointer; }
+.repo-item:hover { background: var(--bg); }
+.repo-item.active { background: var(--signal-dim); }
+.repo-item-head { display: flex; align-items: baseline; gap: 8px; }
+.repo-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.repo-item-path { color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- density ---------- */
+
+.gt-commit { padding: 1px 8px; font-size: 11px; }
+.git-tabs { margin: 6px 0 8px; }
 .git-op-banner {
   margin: 6px 0;
   padding: 6px 10px;

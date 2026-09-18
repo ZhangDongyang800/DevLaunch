@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { config } from '../store'
-import { branches, refreshRepo, refreshStatuses, selectedRepoId, statuses, tab } from '../gitStore'
+import { branches, loadLastFetch, refreshRepo, refreshStatuses, selectedRepoId, statuses, tab } from '../gitStore'
 import GitTopBar from '../components/GitTopBar.vue'
 import GitChanges from '../components/GitChanges.vue'
 import GitHistory from '../components/GitHistory.vue'
@@ -32,6 +32,28 @@ watch(
     }
   },
 )
+
+function onKey(e: KeyboardEvent) {
+  if (!e.ctrlKey) return
+  const k = e.key.toLowerCase()
+  if (k === 'r') {
+    e.preventDefault()
+    if (selectedRepoId.value) {
+      void refreshRepo(selectedRepoId.value)
+      void loadLastFetch(selectedRepoId.value)
+    }
+  } else if (k === 'f') {
+    e.preventDefault()
+    tab.value = 'history'
+    void nextTick(() => {
+      const el = document.querySelector('.history-filters input') as HTMLInputElement | null
+      el?.focus()
+    })
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onKey))
+onUnmounted(() => window.removeEventListener('keydown', onKey))
 </script>
 
 <template>
