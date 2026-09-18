@@ -70,7 +70,7 @@ npm run dev
 
 - **收藏与最近使用**：常用项目可收藏置顶，启动过的项目按最近时间排序。
 
-- **Git 页（GitHub Desktop 形态）**：顶部仓库选择 + `Changes | History` 两个 Tab。Changes 用文件树展示改动，可暂存 / 取消暂存（含全部）、丢弃已跟踪文件的修改，并以结构化 diff 查看（统一 / 左右对比、行号、隐藏空白），支持提交（含 amend）；分支选择器可切换 / 新建 / 重命名 / 删除 / 合并 / 变基，提交图带 branch/tag 标签并区分合并节点。History 支持按提交信息 / 作者搜索；右键提交可复制 SHA、Revert、Cherry-pick、soft/mixed Reset，右键文件可打开或查看其历史。顶栏提供 Fetch / Pull / Push（凭据走 Git Credential Manager，无 force-push），提交框带 Commit & Push。项目行保留状态 chip，点击跳转。
+- **Git 页（GitHub Desktop 形态）**：可搜索的仓库选择器（名称 + 路径，最近使用优先）+ `Changes | History` 两个 Tab + 快捷键（`Ctrl+R` 刷新、`Ctrl+F` 搜索历史、`Ctrl+Enter` 提交）。Changes 用文件树展示改动，可暂存 / 取消暂存（含全部）、丢弃已跟踪文件的修改，并以结构化 diff 查看（统一 / 左右对比、行号、隐藏空白），支持提交（含 amend）；分支选择器可切换 / 新建 / 重命名 / 删除 / 合并 / 变基，提交图带 branch/tag 标签并区分合并节点。History 支持按提交信息 / 作者搜索；右键提交可复制 SHA、Revert、Cherry-pick、soft/mixed Reset，右键文件可打开或查看其历史。顶栏提供 Fetch / Pull / Push（凭据走 Git Credential Manager，无 force-push），提交框带 Commit & Push。项目行保留状态 chip，点击跳转。
 
 ## 快速开始
 
