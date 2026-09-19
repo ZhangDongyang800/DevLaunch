@@ -70,6 +70,8 @@ Of course, it cannot fix bugs or other development problems for you. It only wor
 
 - **Favorites and recents**: pin frequently used projects; launched projects are ordered by recency.
 
+- **Per-task environments (git worktree)**: for repos where several tasks run in parallel, enable environments on a project and DevLaunch creates one worktree per branch under a root you choose, optionally copying only the local (untracked) files you allow-list. Launching an environment runs that project's startup items inside its worktree and injects `DEVLAUNCH_WORKTREE`, `DEVLAUNCH_WORKTREE_BRANCH` and — if you set a port base — a stable `PORT` for that branch. The port number is only an environment variable: DevLaunch never probes, reserves or monitors ports, and never waits for a service to come up.
+
 - **Git page (GitHub Desktop-style)**: a searchable repo picker (name + path, most-recent first) plus `Changes | History` tabs and keyboard shortcuts (`Ctrl+R` refresh, `Ctrl+F` search history, `Ctrl+Enter` commit). Review changes in a file tree, stage/unstage (or all), discard tracked edits, read structured diffs (unified or side-by-side, line numbers, hide whitespace), and commit — with amend. Switch, create, rename, delete and merge/rebase branches from the branch selector, and follow the commit graph with branch/tag labels and distinct merge nodes. History is searchable by message/author; right-click a commit to copy its SHA, revert, cherry-pick, or soft/mixed reset, and right-click a file to open it or view its history. Fetch / pull / push live in the top bar (credentials via Git Credential Manager; no force-push), and the commit box offers Commit & Push. Project rows keep a status chip that jumps here.
 
 ## Quick Start
@@ -114,7 +116,7 @@ python -m uvicorn main:app --reload
 
 ```jsonc
 {
-  "version": 3,
+  "version": 4,
   "name": "MyApp",
   "items": [
     {
@@ -128,6 +130,7 @@ python -m uvicorn main:app --reload
 ```
 
 - Item `id` is optional; DevLaunch fills it in when reading.
+- A project that uses environments can carry an optional `worktree` section (root, `copy` allow-list, `portBase`, `portKey`). Per-machine state — port leases, favorites, recents, hotkey, git path — is never exported.
 - Importing a `devlaunch.json` means trusting the commands inside it (config as code). Only import files you trust.
 
 ### Let an AI write it for you
@@ -136,7 +139,7 @@ DevLaunch is offline and has no built-in AI: any coding agent or chat AI can wri
 
 ```text
 Read this project's package.json / pyproject.toml / Cargo.toml / go.mod and generate a devlaunch.json for me.
-Format: {"version":3,"name":"<project>","items":[{"name":"<item>","workDir":"<relative dir, may be empty>","shell":"cmd","command":"<multi-line commands in manual order>"}]}
+Format: {"version":4,"name":"<project>","items":[{"name":"<item>","workDir":"<relative dir, may be empty>","shell":"cmd","command":"<multi-line commands in manual order>"}]}
 Rules: include only commands needed to start dev services; separate multiple lines with \n; do not invent scripts or services that do not exist.
 ```
 

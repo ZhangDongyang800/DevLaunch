@@ -70,6 +70,8 @@ npm run dev
 
 - **收藏与最近使用**：常用项目可收藏置顶，启动过的项目按最近时间排序。
 
+- **按任务开发环境（git worktree）**：对一个项目启用环境后，每个分支一个 worktree，统一创建在你指定的根目录下；可选只复制你列入白名单的本地（未跟踪）文件。启动某个环境时，该项目的所有启动项都在这个 worktree 里执行，并注入 `DEVLAUNCH_WORKTREE`、`DEVLAUNCH_WORKTREE_BRANCH`，以及设了端口起点后该分支稳定分配的一个 `PORT`。端口只是一个环境变量：DevLaunch 不探测、不占用、不监控端口，也不等待服务就绪。
+
 - **Git 页（GitHub Desktop 形态）**：可搜索的仓库选择器（名称 + 路径，最近使用优先）+ `Changes | History` 两个 Tab + 快捷键（`Ctrl+R` 刷新、`Ctrl+F` 搜索历史、`Ctrl+Enter` 提交）。Changes 用文件树展示改动，可暂存 / 取消暂存（含全部）、丢弃已跟踪文件的修改，并以结构化 diff 查看（统一 / 左右对比、行号、隐藏空白），支持提交（含 amend）；分支选择器可切换 / 新建 / 重命名 / 删除 / 合并 / 变基，提交图带 branch/tag 标签并区分合并节点。History 支持按提交信息 / 作者搜索；右键提交可复制 SHA、Revert、Cherry-pick、soft/mixed Reset，右键文件可打开或查看其历史。顶栏提供 Fetch / Pull / Push（凭据走 Git Credential Manager，无 force-push），提交框带 Commit & Push。项目行保留状态 chip，点击跳转。
 
 ## 快速开始
@@ -114,7 +116,7 @@ python -m uvicorn main:app --reload
 
 ```jsonc
 {
-  "version": 3,
+  "version": 4,
   "name": "MyApp",
   "items": [
     {
@@ -128,6 +130,7 @@ python -m uvicorn main:app --reload
 ```
 
 - 启动项 `id` 可以省略，DevLaunch 读取时会自动补齐。
+- 启用环境的仓库可以额外携带 `worktree` 段（环境根目录、`copy` 白名单、`portBase`、`portKey`）；本机状态（端口租约、收藏、最近使用、热键、git 路径）不会被导出。
 - 导入 `devlaunch.json` 等于信任其中的命令（配置即代码），只导入你信任的文件。
 
 ### 让 AI 帮你生成配置
@@ -136,7 +139,7 @@ DevLaunch 不联网、也不需要内建 AI：任何编码代理 / 聊天 AI 都
 
 ```text
 请阅读本项目的 package.json / pyproject.toml / Cargo.toml / go.mod 等项目文件，为我生成一份 devlaunch.json。
-格式：{"version":3,"name":"<项目名>","items":[{"name":"<启动项名>","workDir":"<相对目录，可为空>","shell":"cmd","command":"<按手动操作顺序的多行命令>"}]}
+格式：{"version":4,"name":"<项目名>","items":[{"name":"<启动项名>","workDir":"<相对目录，可为空>","shell":"cmd","command":"<按手动操作顺序的多行命令>"}]}
 要求：只包含启动开发服务所需的命令；多行命令用 \n 分隔；不要编造不存在的脚本或服务。
 ```
 
