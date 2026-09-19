@@ -5,10 +5,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const CONFIG_VERSION: u32 = 7;
+pub const CONFIG_VERSION: u32 = 8;
 pub const MODERN_VERSION: u32 = 3;
 pub const TEMPLATE_VERSION: u32 = 4;
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+D";
+pub const DEFAULT_THEME: &str = "signal";
+
+/// 可选主题（= style.css 里的 [data-theme] 覆盖块）；只改配色不改布局。
+pub const THEMES: [&str; 4] = ["signal", "graphite", "indigo", "amber"];
 
 fn default_hotkey() -> String {
     DEFAULT_HOTKEY.to_string()
@@ -110,11 +114,33 @@ pub struct Settings {
     /// 用户指定的 git.exe 绝对路径；空 = 自动检测（PATH / Program Files）。
     #[serde(default)]
     pub git_path: Option<String>,
+    /// 配色主题名（前端 style.css 的 [data-theme]）；本机偏好，不进模板。
+    #[serde(default = "default_theme")]
+    pub theme: String,
+}
+
+fn default_theme() -> String {
+    DEFAULT_THEME.to_string()
+}
+
+/// 未知 / 空主题名归一到默认值，避免前端拿到没实现的主题名。
+pub fn normalize_theme(name: &str) -> String {
+    let trimmed = name.trim();
+    if THEMES.contains(&trimmed) {
+        trimmed.to_string()
+    } else {
+        DEFAULT_THEME.to_string()
+    }
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { autostart: false, hotkey: default_hotkey(), git_path: None }
+        Self {
+            autostart: false,
+            hotkey: default_hotkey(),
+            git_path: None,
+            theme: default_theme(),
+        }
     }
 }
 
@@ -346,6 +372,7 @@ pub fn parse_config(text: &str) -> Result<AppConfig, serde_json::Error> {
         legacy.into_config()
     };
     normalize_ids(&mut cfg);
+    cfg.settings.theme = normalize_theme(&cfg.settings.theme);
     Ok(cfg)
 }
 
@@ -659,8 +686,8 @@ mod tests {
 
     #[test]
     fn too_new_rejected_per_file_type() {
-        assert!(parse_config(r#"{"version":8,"projects":[]}"#).is_err());
-        assert!(parse_config(r#"{"version":7,"projects":[]}"#).is_ok());
+        assert!(parse_config(r#"{"version":9,"projects":[]}"#).is_err());
+        assert!(parse_config(r#"{"version":8,"projects":[]}"#).is_ok());
         assert!(parse_template(r#"{"version":5,"name":"X","items":[]}"#).is_err());
         assert!(parse_template(r#"{"version":4,"name":"X","items":[]}"#).is_ok());
     }
@@ -677,7 +704,7 @@ mod tests {
             "items":[{"id":"i1","name":"bash项","shell":"bash","command":"npm run dev"}]}]}"#;
         let cfg = parse_config(v4).unwrap();
         assert_eq!(cfg.version, CONFIG_VERSION);
-        assert_eq!(CONFIG_VERSION, 7);
+        assert_eq!(CONFIG_VERSION, 8);
         assert!(cfg.projects[0].favorite);
         assert_eq!(cfg.projects[0].items[0].shell, Shell::Bash);
         assert_eq!(cfg.projects[0].items[0].command, "npm run dev");
@@ -716,6 +743,36 @@ mod tests {
         assert_eq!(cfg.settings.git_path.as_deref(), Some(r"C:\git.exe"));
         assert_eq!(cfg.projects[0].worktree, None);
         assert_eq!(cfg.projects[0].items[0].shell, Shell::Bash);
+    }
+
+    #[test]
+    fn v7_config_migrates_to_v8_with_default_theme() {
+        let v7 = r#"{"version":7,"settings":{"autostart":false,"hotkey":"Ctrl+Alt+D","gitPath":"C:\\git.exe"},
+            "projects":[{"id":"p1","name":"X","rootDir":"D:\\p","favorite":true,
+            "items":[{"id":"i1","name":"bash项","shell":"bash","command":"npm run dev"}]}]}"#;
+        let cfg = parse_config(v7).unwrap();
+        assert_eq!(cfg.version, CONFIG_VERSION);
+        assert_eq!(cfg.settings.theme, "signal");
+        assert_eq!(cfg.settings.git_path.as_deref(), Some(r"C:\git.exe"));
+        assert!(cfg.projects[0].favorite);
+    }
+
+    #[test]
+    fn theme_round_trips_and_rejects_unknown_names() {
+        let mut cfg = AppConfig::default();
+        assert_eq!(Settings::default().theme, "signal");
+        cfg.settings.theme = "indigo".into();
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"theme\":\"indigo\""), "{json}");
+        assert_eq!(parse_config(&json).unwrap().settings.theme, "indigo");
+
+        // 手改 / 旧版本没写过的主题名一律归一到默认值，前端不会拿到未实现的主题
+        assert_eq!(normalize_theme("  graphite  "), "graphite");
+        assert_eq!(normalize_theme("light"), "signal");
+        assert_eq!(normalize_theme(""), "signal");
+        let weird = r#"{"version":8,"settings":{"autostart":false,"hotkey":"Ctrl+Alt+D","theme":"neon"},
+            "projects":[]}"#;
+        assert_eq!(parse_config(weird).unwrap().settings.theme, "signal");
     }
 
     #[test]

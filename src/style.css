@@ -20,8 +20,25 @@
   --signal: #3ddc84;
   --signal-border: rgba(61, 220, 132, 0.35);
   --signal-dim: rgba(61, 220, 132, 0.08);
+  --signal-strong: #4be78f;
+  /* 强调色实心底上的文字色（按钮主色、HEAD ref 标签） */
+  --on-signal: #062312;
   --danger: #ff5f56;
   --danger-dim: rgba(255, 95, 86, 0.08);
+  /* 警告/脏标记：不是错误，只是「有待处理的改动」 */
+  --warn: #e0b341;
+  --warn-border: rgba(224, 179, 65, 0.4);
+  --diff-add-text: #b8f5cf;
+  --diff-del-text: #ffc4c0;
+  --scroll-thumb: #1b2128;
+  --shadow: rgba(0, 0, 0, 0.45);
+  /* 提交图泳道色（GitGraph 通过 --lane-N 读取，与主题一起换） */
+  --lane-1: #3ddc84;
+  --lane-2: #5aa9e6;
+  --lane-3: #e0b341;
+  --lane-4: #c586c0;
+  --lane-5: #e06c75;
+  --lane-6: #56b6c2;
 
   --mono: "Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace;
   --sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
@@ -48,6 +65,113 @@
   --badge-h: 18px;
 }
 
+/* ============================================================
+   主题 = 只覆盖颜色 token。布局、间距、圆角、字号、动效一律
+   不在此处改动；新主题请沿用同一批变量名。
+   ============================================================ */
+
+/* 石墨青：中性冷灰底 + 青色强调 */
+:root[data-theme='graphite'] {
+  --bg: #0c1013;
+  --panel: #11161b;
+  --elevated: #171e24;
+
+  --border: #1c242c;
+  --border-strong: #28323d;
+  --text: #dfe6ec;
+  --muted: #818d9a;
+  --faint: #535e6a;
+
+  --signal: #45cfd6;
+  --signal-border: rgba(69, 207, 214, 0.35);
+  --signal-dim: rgba(69, 207, 214, 0.08);
+  --signal-strong: #6adee4;
+  --on-signal: #05262a;
+  --danger: #ff6b6b;
+  --danger-dim: rgba(255, 107, 107, 0.08);
+  --warn: #e0b341;
+  --warn-border: rgba(224, 179, 65, 0.4);
+  --diff-add-text: #b6ecef;
+  --diff-del-text: #ffc9c6;
+  --scroll-thumb: #1b232b;
+  --shadow: rgba(0, 0, 0, 0.5);
+
+  --lane-1: #45cfd6;
+  --lane-2: #6f9ee0;
+  --lane-3: #e0b341;
+  --lane-4: #b98ad6;
+  --lane-5: #e0796f;
+  --lane-6: #4fb0b8;
+}
+
+/* 靛紫：紫黑底 + 紫/粉强调 */
+:root[data-theme='indigo'] {
+  --bg: #0b0a12;
+  --panel: #12111c;
+  --elevated: #191727;
+
+  --border: #221f33;
+  --border-strong: #302c47;
+  --text: #e6e2f2;
+  --muted: #8b85a6;
+  --faint: #5c5777;
+
+  --signal: #a98bf0;
+  --signal-border: rgba(169, 139, 240, 0.36);
+  --signal-dim: rgba(169, 139, 240, 0.09);
+  --signal-strong: #bda6ff;
+  --on-signal: #1b1035;
+  --danger: #ff6b8a;
+  --danger-dim: rgba(255, 107, 138, 0.09);
+  --warn: #e6b45a;
+  --warn-border: rgba(230, 180, 90, 0.4);
+  --diff-add-text: #cdb9ff;
+  --diff-del-text: #ffc2d0;
+  --scroll-thumb: #221f31;
+  --shadow: rgba(6, 4, 14, 0.55);
+
+  --lane-1: #a98bf0;
+  --lane-2: #6ec6ff;
+  --lane-3: #e6b45a;
+  --lane-4: #f07bb0;
+  --lane-5: #7ce0b0;
+  --lane-6: #ff9d76;
+}
+
+/* 琥珀棕：暖黑底 + 金铜强调（脏标记用更深的铜色，与主色拉开明度） */
+:root[data-theme='amber'] {
+  --bg: #12100c;
+  --panel: #18150f;
+  --elevated: #201c15;
+
+  --border: #2a241a;
+  --border-strong: #3a3225;
+  --text: #ece4d6;
+  --muted: #9a8b74;
+  --faint: #6a5e4c;
+
+  --signal: #e8b45c;
+  --signal-border: rgba(232, 180, 92, 0.36);
+  --signal-dim: rgba(232, 180, 92, 0.09);
+  --signal-strong: #f2c575;
+  --on-signal: #2b1c05;
+  --danger: #e2604f;
+  --danger-dim: rgba(226, 96, 79, 0.1);
+  --warn: #c98a2b;
+  --warn-border: rgba(201, 138, 43, 0.45);
+  --diff-add-text: #b7d9a4;
+  --diff-del-text: #f5c0b3;
+  --scroll-thumb: #241f16;
+  --shadow: rgba(10, 6, 0, 0.55);
+
+  --lane-1: #e8b45c;
+  --lane-2: #78b7d8;
+  --lane-3: #c98a2b;
+  --lane-4: #d387c4;
+  --lane-5: #7fc98f;
+  --lane-6: #e2604f;
+}
+
 * { box-sizing: border-box; }
 
 html, body { height: 100%; }
@@ -70,7 +194,7 @@ input, textarea { user-select: text; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: #1b2128;
+  background: var(--scroll-thumb);
   border-radius: 5px;
   border: 2px solid var(--bg);
 }
@@ -294,12 +418,12 @@ button.bordered:hover { border-color: var(--border-strong); color: var(--text); 
 
 button.primary {
   background: var(--signal);
-  color: #062312;
+  color: var(--on-signal);
   font-weight: 600;
   padding: 0 14px;
 }
 
-button.primary:hover { background: #4be78f; }
+button.primary:hover { background: var(--signal-strong); }
 
 button.accent {
   color: var(--signal);
@@ -1046,6 +1170,7 @@ button.star { color: var(--faint); }
 button.star.on { color: var(--signal); }
 .hotkey-input { width: 150px; text-align: center; }
 .gitpath-input { width: 260px; }
+.theme-select { width: 260px; }
 
 /* ---------- palette: drill into project items ---------- */
 
@@ -1094,7 +1219,7 @@ button.star.on { color: var(--signal); }
 .file-row { display: flex; align-items: center; gap: 6px; padding: 2px var(--sp-2); font-size: 11.5px; cursor: pointer; }
 .file-row:hover { background: var(--elevated); }
 .file-row.active { background: var(--signal-dim); }
-.file-status { width: 12px; color: #e0b341; flex-shrink: 0; }
+.file-status { width: 12px; color: var(--warn); flex-shrink: 0; }
 .file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-discard { opacity: 0; color: var(--danger); }
 .file-row:hover .file-discard { opacity: 1; }
@@ -1115,10 +1240,10 @@ button.star.on { color: var(--signal); }
 .dl-no { width: 34px; text-align: right; color: var(--faint); flex-shrink: 0; }
 .dl-mark { width: 10px; flex-shrink: 0; }
 .dl-text { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.k-add { background: rgba(61, 220, 132, 0.08); }
-.k-add .dl-text { color: #b8f5cf; }
-.k-del { background: rgba(255, 95, 86, 0.08); }
-.k-del .dl-text { color: #ffc4c0; }
+.k-add { background: var(--signal-dim); }
+.k-add .dl-text { color: var(--diff-add-text); }
+.k-del { background: var(--danger-dim); }
+.k-del .dl-text { color: var(--diff-del-text); }
 .k-empty { background: transparent; }
 .diff-split-row { display: flex; align-items: stretch; }
 .diff-line.half + .diff-line.half { border-left: 1px solid var(--border); }
@@ -1166,7 +1291,7 @@ button.star.on { color: var(--signal); }
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: 3px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 8px 28px var(--shadow);
 }
 .ctx-item { display: block; width: 100%; text-align: left; padding: 5px 9px; font-size: 12px; border-radius: var(--radius-sm); }
 .ctx-item:hover { background: var(--bg); color: var(--text); }
@@ -1180,9 +1305,9 @@ button.star.on { color: var(--signal); }
 }
 .git-badge:hover { border-color: var(--signal-border); color: var(--text); }
 .gb-branch { color: var(--signal); }
-.gb-dirty { color: #e0b341; }
+.gb-dirty { color: var(--warn); }
 .gb-ahead { color: var(--signal); }
-.gb-behind { color: #e0b341; }
+.gb-behind { color: var(--warn); }
 .gb-warn { color: var(--danger); }
 
 .git-global-error {
@@ -1258,7 +1383,7 @@ button.star.on { color: var(--signal); }
   background: var(--elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 10px 30px var(--shadow);
   padding: 6px;
 }
 .repo-search {
@@ -1329,7 +1454,7 @@ button.star.on { color: var(--signal); }
 .gc-empty { padding: 10px; color: var(--faint); font-size: 12px; }
 
 .gt-file { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-size: 11.5px; }
-.gt-status { width: 14px; color: #e0b341; flex-shrink: 0; }
+.gt-status { width: 14px; color: var(--warn); flex-shrink: 0; }
 .gt-path { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gt-label { color: var(--faint); font-size: 11px; flex-shrink: 0; }
 
@@ -1347,10 +1472,10 @@ button.star.on { color: var(--signal); }
   border-color: var(--signal-border);
   background: var(--signal-dim);
 }
-.gt-ref.head { color: #062312; background: var(--signal); border-color: var(--signal); }
+.gt-ref.head { color: var(--on-signal); background: var(--signal); border-color: var(--signal); }
 
 .git-patch { margin: 0; padding: 8px; font-size: 11px; line-height: 1.5; color: var(--text); white-space: pre; }
-.gt-truncated { padding: 6px 8px; color: #e0b341; font-size: 11.5px; }
+.gt-truncated { padding: 6px 8px; color: var(--warn); font-size: 11.5px; }
 
 .git-log-scroll { display: flex; align-items: flex-start; }
 .git-graph { flex-shrink: 0; }

@@ -404,7 +404,7 @@ const isGitRepo = computed(() => !!selected.value && view.value !== null)
 .env-bad { color: var(--danger); border-color: var(--danger); background: var(--danger-dim); }
 /* 与首页 / Git 页的脏标记同一套颜色语言：琥珀=有改动，弱化=干净或不可读 */
 .env-badge { flex-shrink: 0; }
-.env-dirty { color: #e0b341; border-color: rgba(224, 179, 65, 0.4); }
+.env-dirty { color: var(--warn); border-color: var(--warn-border); }
 .env-mute { color: var(--muted); }
 
 .env-row {

@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import { getConfig, gitWorktrees, hidePalette, launchItem, launchProject, launchWorktree, openDir } from './api'
+import { applyTheme } from './store'
 import { filterProjects, sortProjects } from './utils'
 import type { AppConfig, Item, Project, WorktreeInfo } from './types'
 
@@ -69,6 +70,7 @@ watch(selected, async () => {
 async function reload() {
   try {
     cfg.value = await getConfig()
+    applyTheme(cfg.value?.settings.theme)
     error.value = ''
   } catch (e) {
     error.value = `${e}`

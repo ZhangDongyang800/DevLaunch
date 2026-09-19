@@ -30,6 +30,7 @@ export interface Settings {
   autostart: boolean
   hotkey: string
   gitPath?: string | null
+  theme: string
 }
 
 export interface PushResult {

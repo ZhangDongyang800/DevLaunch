@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { config, persist } from '../store'
+import { applyTheme, config, persist, THEMES } from '../store'
 import { exportConfigTo, getAutostart, getConfig, getGitInfo, importConfigFrom, setAutostart, setHotkey } from '../api'
 import type { GitInfo } from '../types'
 
@@ -9,6 +9,32 @@ const emit = defineEmits<{ notify: [msg: string, kind?: 'ok' | 'err'] }>()
 const autostart = ref(false)
 const gitPath = ref('')
 const gitInfo = ref<GitInfo>({ configured: null, resolved: null })
+
+const THEME_LABELS: Record<string, string> = {
+  signal: 'Signal · 黑 + 信号绿（默认）',
+  graphite: '石墨青 · 冷灰 + 青',
+  indigo: '靛紫 · 紫黑 + 紫',
+  amber: '琥珀棕 · 暖黑 + 金',
+}
+
+async function onThemeChange(e: Event) {
+  if (!config.value) return
+  const select = e.target as HTMLSelectElement
+  const next = select.value
+  const previous = config.value.settings.theme
+  if (next === previous) return
+  config.value.settings.theme = next
+  applyTheme(next)
+  try {
+    await persist()
+    emit('notify', '主题已切换')
+  } catch (err) {
+    config.value!.settings.theme = previous
+    applyTheme(previous)
+    select.value = previous
+    emit('notify', `保存失败：${err}`, 'err')
+  }
+}
 
 onMounted(async () => {
   try {
@@ -223,6 +249,16 @@ onUnmounted(() => window.removeEventListener('keydown', onRecordKeydown, true))
         />
         <button class="ghost" @click="browseGit">选择…</button>
         <button class="ghost" @click="clearGit">清除</button>
+      </div>
+
+      <div class="list-row">
+        <div class="set-info">
+          <div class="set-title">主题</div>
+          <div class="set-sub">只换配色（底色 / 边框 / 强调色），不改布局与字号；搜索面板同步生效，不写入 devlaunch.json</div>
+        </div>
+        <select class="inline mono theme-select" :value="config.settings.theme" @change="onThemeChange">
+          <option v-for="t in THEMES" :key="t" :value="t">{{ THEME_LABELS[t] }}</option>
+        </select>
       </div>
 
       <div class="list-row">

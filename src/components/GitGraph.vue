@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { GraphRow } from '../types'
+import { theme } from '../store'
 
 const props = defineProps<{ rows: GraphRow[]; selected: string }>()
 
@@ -8,7 +9,14 @@ const ROW = 22
 const COL = 14
 const PAD = 10
 
-const colors = ['#3ddc84', '#5aa9e6', '#e0b341', '#c586c0', '#e06c75', '#56b6c2']
+const FALLBACK_LANES = ['#3ddc84', '#5aa9e6', '#e0b341', '#c586c0', '#e06c75', '#56b6c2']
+
+// 泳道色来自主题 token，换主题时提交图跟着变；不依赖 CSS 变量解析失败时的兜底会掉回默认配色
+const lanes = computed(() => {
+  void theme.value
+  const cs = getComputedStyle(document.documentElement)
+  return FALLBACK_LANES.map((fallback, i) => cs.getPropertyValue(`--lane-${i + 1}`).trim() || fallback)
+})
 
 const width = computed(() => {
   let maxLane = 0
@@ -28,6 +36,7 @@ function y(i: number) {
   return i * ROW + ROW / 2
 }
 function stroke(lane: number) {
+  const colors = lanes.value
   return colors[lane % colors.length]
 }
 </script>
