@@ -16,6 +16,7 @@ pub struct PaneSpec {
     pub work_dir: std::path::PathBuf,
     pub shell: crate::config::Shell,
     pub command: String,
+    pub env: Vec<(String, String)>,
 }
 
 #[cfg(not(windows))]

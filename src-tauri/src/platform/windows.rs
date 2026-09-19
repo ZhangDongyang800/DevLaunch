@@ -13,6 +13,8 @@ pub struct PaneSpec {
     pub work_dir: PathBuf,
     pub shell: Shell,
     pub command: String,
+    /// 启动前注入的环境变量（按任务环境用）；调用方必须先过 `worktree::validate_env_pair`。
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -46,15 +48,16 @@ fn escape_echo_text(text: &str) -> String {
     out
 }
 
-/// 先 cd 到工作目录，再逐行回显「目录>命令」后执行，视觉上等同手动输入。
-pub fn cmd_pane_command(work_dir: &Path, command: &str) -> String {
+/// 先注入环境变量，再 cd 到工作目录，然后逐行回显「目录>命令」后执行。
+pub fn cmd_pane_command(work_dir: &Path, command: &str, env: &[(String, String)]) -> String {
     let dir = work_dir.display().to_string();
     let cd = format!("cd /d \"{dir}\"");
     let lines: Vec<&str> = command.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-    if lines.is_empty() {
-        return cd;
-    }
-    let mut parts = vec![cd];
+    let mut parts: Vec<String> = env
+        .iter()
+        .map(|(k, v)| format!("set \"{k}={v}\""))
+        .chain(std::iter::once(cd))
+        .collect();
     for line in lines {
         parts.push(format!("echo {}", escape_echo_text(&format!("{dir}>{line}"))));
         parts.push(line.to_string());
@@ -62,12 +65,30 @@ pub fn cmd_pane_command(work_dir: &Path, command: &str) -> String {
     parts.join(" && ")
 }
 
-pub fn ps_pane_script(work_dir: &Path, command: &str) -> String {
+/// 与 cmd 同一顺序约定：环境变量 → cd → 用户命令原文。
+fn env_lines_ps(env: &[(String, String)]) -> Vec<String> {
+    env.iter()
+        .map(|(k, v)| format!("$env:{k}='{}'", v.replace('\'', "''")))
+        .collect()
+}
+
+fn env_lines_bash(env: &[(String, String)]) -> Vec<String> {
+    env.iter()
+        .map(|(k, v)| format!("export {k}='{}'", v.replace('\'', "'\\''")))
+        .collect()
+}
+
+pub fn ps_pane_script(work_dir: &Path, command: &str, env: &[(String, String)]) -> String {
     let cd = format!(
         "Set-Location -LiteralPath '{}'",
         work_dir.display().to_string().replace('\'', "''")
     );
-    if command.trim().is_empty() { cd } else { format!("{cd}\r\n{command}") }
+    let mut lines = env_lines_ps(env);
+    lines.push(cd);
+    if !command.trim().is_empty() {
+        lines.push(command.to_string());
+    }
+    lines.join("\r\n")
 }
 
 pub fn encode_ps_command(script: &str) -> String {
@@ -140,17 +161,17 @@ pub fn to_msys_path(path: &Path) -> String {
     normalized
 }
 
-/// bash 窗格脚本：cd → 用户命令原文（不逐行回显）→ exec 保持窗口。
-pub fn bash_pane_script(work_dir: &Path, command: &str) -> String {
+/// bash 窗格脚本：环境变量 → cd → 用户命令原文（不逐行回显）→ exec 保持窗口。
+pub fn bash_pane_script(work_dir: &Path, command: &str, env: &[(String, String)]) -> String {
     let command = command.replace("\r\n", "\n");
     let dir = to_msys_path(work_dir).replace('\'', "'\\''");
-    let mut script = format!("cd '{dir}'");
+    let mut lines = env_lines_bash(env);
+    lines.push(format!("cd '{dir}'"));
     if !command.trim().is_empty() {
-        script.push('\n');
-        script.push_str(&command);
+        lines.extend(command.lines().map(str::to_string));
     }
-    script.push_str("\nexec bash -il");
-    script
+    lines.push("exec bash -il".to_string());
+    lines.join("\n")
 }
 
 pub fn encode_bash_script(script: &str) -> String {
@@ -159,8 +180,8 @@ pub fn encode_bash_script(script: &str) -> String {
 }
 
 /// 固定外壳：用户内容只存在于 base64，不参与任何引号解析。
-pub fn bash_launch_args(work_dir: &Path, command: &str) -> String {
-    let b64 = encode_bash_script(&bash_pane_script(work_dir, command));
+pub fn bash_launch_args(work_dir: &Path, command: &str, env: &[(String, String)]) -> String {
+    let b64 = encode_bash_script(&bash_pane_script(work_dir, command, env));
     format!("-lc \"bash -l <(base64 -d<<<{b64})\"")
 }
 
@@ -224,33 +245,33 @@ pub fn build_wt_commandline(project_name: &str, panes: &[PaneSpec], resolved_bas
         match p.shell {
             Shell::Cmd => {
                 line.push_str(" cmd /K \"");
-                line.push_str(&cmd_pane_command(&p.work_dir, &p.command));
+                line.push_str(&cmd_pane_command(&p.work_dir, &p.command, &p.env));
                 line.push('"');
             }
             Shell::PowerShell => {
                 line.push_str(" powershell -NoExit -ExecutionPolicy Bypass -EncodedCommand ");
-                line.push_str(&encode_ps_command(&ps_pane_script(&p.work_dir, &p.command)));
+                line.push_str(&encode_ps_command(&ps_pane_script(&p.work_dir, &p.command, &p.env)));
             }
             Shell::Bash => {
                 let bash = resolved_bash.unwrap_or_else(|| Path::new("bash"));
                 line.push(' ');
                 line.push_str(&quote_wt_arg(&bash.display().to_string()));
                 line.push(' ');
-                line.push_str(&bash_launch_args(&p.work_dir, &p.command));
+                line.push_str(&bash_launch_args(&p.work_dir, &p.command, &p.env));
             }
         }
     }
     line
 }
 
-pub fn cmd_launch_args(work_dir: &Path, command: &str) -> String {
-    format!("/K \"{}\"", cmd_pane_command(work_dir, command))
+pub fn cmd_launch_args(work_dir: &Path, command: &str, env: &[(String, String)]) -> String {
+    format!("/K \"{}\"", cmd_pane_command(work_dir, command, env))
 }
 
-pub fn ps_launch_args(work_dir: &Path, command: &str) -> String {
+pub fn ps_launch_args(work_dir: &Path, command: &str, env: &[(String, String)]) -> String {
     format!(
         "-NoExit -ExecutionPolicy Bypass -EncodedCommand {}",
-        encode_ps_command(&ps_pane_script(work_dir, command))
+        encode_ps_command(&ps_pane_script(work_dir, command, env))
     )
 }
 
@@ -295,17 +316,17 @@ pub fn plan_spawn(
                 let launch = match p.shell {
                     Shell::Cmd => FallbackLaunch {
                         program: "cmd".to_string(),
-                        args: cmd_launch_args(&p.work_dir, &p.command),
+                        args: cmd_launch_args(&p.work_dir, &p.command, &p.env),
                         work_dir: p.work_dir.clone(),
                     },
                     Shell::PowerShell => FallbackLaunch {
                         program: "powershell".to_string(),
-                        args: ps_launch_args(&p.work_dir, &p.command),
+                        args: ps_launch_args(&p.work_dir, &p.command, &p.env),
                         work_dir: p.work_dir.clone(),
                     },
                     Shell::Bash => FallbackLaunch {
                         program: resolved_bash.unwrap_or_else(|| Path::new("bash")).display().to_string(),
-                        args: bash_launch_args(&p.work_dir, &p.command),
+                        args: bash_launch_args(&p.work_dir, &p.command, &p.env),
                         work_dir: p.work_dir.clone(),
                     },
                 };
@@ -357,7 +378,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     fn pane(title: &str, dir: &str, shell: Shell, cmd: &str) -> PaneSpec {
-        PaneSpec { title: title.into(), work_dir: PathBuf::from(dir), shell, command: cmd.into() }
+        PaneSpec { title: title.into(), work_dir: PathBuf::from(dir), shell, command: cmd.into(), env: vec![] }
     }
 
     fn decode_ps_command(b64: &str) -> String {
@@ -382,20 +403,20 @@ mod tests {
     #[test]
     fn cmd_pane_command_echoes_prompt_per_line() {
         assert_eq!(
-            cmd_pane_command(Path::new(r"D:\My Proj\backend"), "conda activate x\npython -m uvicorn main:app"),
+            cmd_pane_command(Path::new(r"D:\My Proj\backend"), "conda activate x\npython -m uvicorn main:app", &[]),
             r#"cd /d "D:\My Proj\backend" && echo D:\My Proj\backend^>conda activate x && conda activate x && echo D:\My Proj\backend^>python -m uvicorn main:app && python -m uvicorn main:app"#
         );
         assert_eq!(
-            cmd_pane_command(Path::new(r"D:\cxdownload\迅雷"), "dir\ndir"),
+            cmd_pane_command(Path::new(r"D:\cxdownload\迅雷"), "dir\ndir", &[]),
             r#"cd /d "D:\cxdownload\迅雷" && echo D:\cxdownload\迅雷^>dir && dir && echo D:\cxdownload\迅雷^>dir && dir"#
         );
     }
 
     #[test]
     fn cmd_pane_command_skips_blank_lines_and_empty_command() {
-        assert_eq!(cmd_pane_command(Path::new(r"D:\p"), "  "), r#"cd /d "D:\p""#);
+        assert_eq!(cmd_pane_command(Path::new(r"D:\p"), "  ", &[]), r#"cd /d "D:\p""#);
         assert_eq!(
-            cmd_pane_command(Path::new(r"D:\p"), "dir\n\n  \ncd x"),
+            cmd_pane_command(Path::new(r"D:\p"), "dir\n\n  \ncd x", &[]),
             r#"cd /d "D:\p" && echo D:\p^>dir && dir && echo D:\p^>cd x && cd x"#
         );
     }
@@ -403,16 +424,53 @@ mod tests {
     #[test]
     fn cmd_pane_prompt_for_drive_root() {
         assert_eq!(
-            cmd_pane_command(Path::new(r"D:\"), "dir"),
+            cmd_pane_command(Path::new(r"D:\"), "dir", &[]),
             r#"cd /d "D:\" && echo D:\^>dir && dir"#
+        );
+    }
+
+    #[test]
+    fn cmd_pane_command_prepends_env_before_cd() {
+        assert_eq!(
+            cmd_pane_command(
+                Path::new(r"D:\wt\feat"),
+                "npm run dev",
+                &[("PORT".to_string(), "5173".to_string()), ("DEVLAUNCH_WORKTREE".to_string(), r"D:\wt\feat".to_string())],
+            ),
+            r#"set "PORT=5173" && set "DEVLAUNCH_WORKTREE=D:\wt\feat" && cd /d "D:\wt\feat" && echo D:\wt\feat^>npm run dev && npm run dev"#
+        );
+        assert_eq!(
+            cmd_pane_command(Path::new(r"D:\My Proj"), "", &[("PORT".to_string(), "3000".to_string())]),
+            r#"set "PORT=3000" && cd /d "D:\My Proj""#
+        );
+        // 括号值只出现在 set "…" 的引号内，cmd 不会把它当代码块
+        assert_eq!(
+            cmd_pane_command(
+                Path::new(r"C:\Program Files (x86)\wt"),
+                "dir",
+                &[("DEVLAUNCH_WORKTREE".to_string(), r"C:\Program Files (x86)\wt".to_string())],
+            ),
+            r#"set "DEVLAUNCH_WORKTREE=C:\Program Files (x86)\wt" && cd /d "C:\Program Files (x86)\wt" && echo C:\Program Files (x86)\wt^>dir && dir"#
         );
     }
 
     #[test]
     fn ps_pane_script_quotes_and_multiline() {
         assert_eq!(
-            ps_pane_script(Path::new(r"D:\it's"), "npm run dev\nnpm test"),
+            ps_pane_script(Path::new(r"D:\it's"), "npm run dev\nnpm test", &[]),
             "Set-Location -LiteralPath 'D:\\it''s'\r\nnpm run dev\nnpm test"
+        );
+    }
+
+    #[test]
+    fn ps_pane_script_env_lines_quote_and_precede_cd() {
+        assert_eq!(
+            ps_pane_script(Path::new(r"D:\p"), "npm run dev", &[("PORT".to_string(), "5173".to_string())]),
+            "$env:PORT='5173'\r\nSet-Location -LiteralPath 'D:\\p'\r\nnpm run dev"
+        );
+        assert_eq!(
+            ps_pane_script(Path::new(r"D:\p"), "", &[("K".to_string(), "it's".to_string())]),
+            "$env:K='it''s'\r\nSet-Location -LiteralPath 'D:\\p'"
         );
     }
 
@@ -432,7 +490,7 @@ mod tests {
             line,
             format!(
                 r#"-w -1 nt -d "D:\p\backend" --title "XingTu" --suppressApplicationTitle cmd /K "cd /d "D:\p\backend" && echo D:\p\backend^>python app.py && python app.py" ; sp -V -d "D:\p\frontend" --title "前端" --suppressApplicationTitle powershell -NoExit -ExecutionPolicy Bypass -EncodedCommand {}"#,
-                encode_ps_command(&ps_pane_script(Path::new(r"D:\p\frontend"), "npm run dev"))
+                encode_ps_command(&ps_pane_script(Path::new(r"D:\p\frontend"), "npm run dev", &[]))
             )
         );
     }
@@ -469,7 +527,7 @@ mod tests {
                 format!(r#"-w -1 nt -d "D:\p" --title "X" --suppressApplicationTitle cmd /K "{expected_pane}""#),
                 "wt cmd case {label}"
             );
-            assert_eq!(cmd_pane_command(Path::new(r"D:\p"), cmd), expected_pane, "cmd_pane case {label}");
+            assert_eq!(cmd_pane_command(Path::new(r"D:\p"), cmd, &[]), expected_pane, "cmd_pane case {label}");
 
             let ppane = pane("t", r"D:\p", Shell::PowerShell, cmd);
             let line = build_wt_commandline("X", &[ppane], None);
@@ -477,7 +535,7 @@ mod tests {
                 line,
                 format!(
                     r#"-w -1 nt -d "D:\p" --title "X" --suppressApplicationTitle powershell -NoExit -ExecutionPolicy Bypass -EncodedCommand {}"#,
-                    encode_ps_command(&ps_pane_script(Path::new(r"D:\p"), cmd))
+                    encode_ps_command(&ps_pane_script(Path::new(r"D:\p"), cmd, &[]))
                 ),
                 "wt ps case {label}"
             );
@@ -515,6 +573,48 @@ mod tests {
     }
 
     #[test]
+    fn wt_commandline_carries_env_into_all_three_shells() {
+        let env = vec![("PORT".to_string(), "5173".to_string())];
+        let mut cmd_pane = pane("cmd", r"D:\wt\feat", Shell::Cmd, "npm run dev");
+        cmd_pane.env = env.clone();
+        let line = build_wt_commandline("X", &[cmd_pane], None);
+        assert!(line.contains(r#"cmd /K "set "PORT=5173" && cd /d "D:\wt\feat""#), "{line}");
+
+        let mut ps_pane = pane("ps", r"D:\wt\feat", Shell::PowerShell, "npm run dev");
+        ps_pane.env = env.clone();
+        let line = build_wt_commandline("X", &[ps_pane], None);
+        let b64 = line.rsplit(' ').next().unwrap();
+        assert_eq!(
+            decode_ps_command(b64),
+            "$env:PORT='5173'\r\nSet-Location -LiteralPath 'D:\\wt\\feat'\r\nnpm run dev"
+        );
+
+        let mut bash_pane = pane("bash", r"D:\wt\feat", Shell::Bash, "npm run dev");
+        bash_pane.env = env.clone();
+        let line = build_wt_commandline("X", &[bash_pane], Some(Path::new(r"C:\Git\bin\bash.exe")));
+        let b64 = line.rsplit("<(base64 -d<<<").next().unwrap().trim_end_matches(")\"");
+        let script = String::from_utf8(base64_decode(b64)).unwrap();
+        assert_eq!(script, "export PORT='5173'\ncd '/d/wt/feat'\nnpm run dev\nexec bash -il");
+    }
+
+    fn base64_decode(b64: &str) -> Vec<u8> {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.decode(b64).unwrap()
+    }
+
+    #[test]
+    fn fallback_launches_carry_env_too() {
+        let mut p = pane("t", r"D:\p", Shell::Cmd, "npm run dev");
+        p.env = vec![("DEVLAUNCH_WORKTREE_BRANCH".to_string(), "feat".to_string())];
+        match plan_spawn(None, None, "X", &[p]).unwrap() {
+            SpawnPlan::Fallback { launches } => {
+                assert!(launches[0].args.contains(r#"set "DEVLAUNCH_WORKTREE_BRANCH=feat""#), "{:?}", launches[0].args);
+            }
+            SpawnPlan::Wt { .. } => panic!("expected fallback"),
+        }
+    }
+
+    #[test]
     fn plan_spawn_fallback_rejects_overlong_commandline() {
         let panes = vec![pane("t", r"D:\p", Shell::Cmd, &"a".repeat(40_000))];
         let err = plan_spawn(None, None, "X", &panes).unwrap_err();
@@ -524,10 +624,10 @@ mod tests {
     #[test]
     fn launch_args_for_fallback_windows() {
         assert_eq!(
-            cmd_launch_args(Path::new(r"D:\p"), "npm run dev"),
+            cmd_launch_args(Path::new(r"D:\p"), "npm run dev", &[]),
             r#"/K "cd /d "D:\p" && echo D:\p^>npm run dev && npm run dev""#
         );
-        let args = ps_launch_args(Path::new(r"D:\p"), "npm run dev");
+        let args = ps_launch_args(Path::new(r"D:\p"), "npm run dev", &[]);
         let b64 = args
             .strip_prefix("-NoExit -ExecutionPolicy Bypass -EncodedCommand ")
             .expect("ps fallback args prefix");
@@ -615,10 +715,10 @@ mod tests {
             SpawnPlan::Fallback { launches } => {
                 assert_eq!(launches.len(), 2);
                 assert_eq!(launches[0].program, "cmd");
-                assert_eq!(launches[0].args, cmd_launch_args(Path::new(r"D:\p\backend"), "python app.py"));
+                assert_eq!(launches[0].args, cmd_launch_args(Path::new(r"D:\p\backend"), "python app.py", &[]));
                 assert_eq!(launches[0].work_dir, PathBuf::from(r"D:\p\backend"));
                 assert_eq!(launches[1].program, "powershell");
-                assert_eq!(launches[1].args, ps_launch_args(Path::new(r"D:\p\frontend"), "npm run dev"));
+                assert_eq!(launches[1].args, ps_launch_args(Path::new(r"D:\p\frontend"), "npm run dev", &[]));
                 assert_eq!(launches[1].work_dir, PathBuf::from(r"D:\p\frontend"));
             }
             SpawnPlan::Wt { .. } => panic!("expected Fallback plan"),
@@ -653,27 +753,37 @@ mod tests {
 
     #[test]
     fn bash_pane_script_contains_cd_command_and_stays_open() {
-        let script = bash_pane_script(Path::new(r"D:\My Proj"), "npm run dev\nnpm test");
+        let script = bash_pane_script(Path::new(r"D:\My Proj"), "npm run dev\nnpm test", &[]);
         assert!(script.starts_with("cd '/d/My Proj'"), "{script}");
         assert!(script.contains("npm run dev\nnpm test"), "{script}");
         assert!(script.ends_with("exec bash -il"), "{script}");
     }
 
     #[test]
+    fn bash_pane_script_env_exports_precede_cd_and_quote_singles() {
+        let script = bash_pane_script(
+            Path::new(r"D:\p"),
+            "npm run dev",
+            &[("PORT".to_string(), "5173".to_string()), ("K".to_string(), "it's".to_string())],
+        );
+        assert_eq!(script, "export PORT='5173'\nexport K='it'\\''s'\ncd '/d/p'\nnpm run dev\nexec bash -il");
+    }
+
+    #[test]
     fn bash_pane_script_escapes_single_quotes_in_path() {
-        let script = bash_pane_script(Path::new(r"D:\it's here"), "echo ok");
+        let script = bash_pane_script(Path::new(r"D:\it's here"), "echo ok", &[]);
         assert!(script.contains(r"cd '/d/it'\''s here'"), "{script}");
     }
 
     #[test]
     fn bash_pane_script_empty_command_still_stays_open() {
-        let script = bash_pane_script(Path::new(r"D:\p"), "   ");
+        let script = bash_pane_script(Path::new(r"D:\p"), "   ", &[]);
         assert_eq!(script, "cd '/d/p'\nexec bash -il");
     }
 
     #[test]
     fn bash_pane_script_normalizes_crlf() {
-        let script = bash_pane_script(Path::new(r"D:\p"), "echo a\r\necho b");
+        let script = bash_pane_script(Path::new(r"D:\p"), "echo a\r\necho b", &[]);
         assert!(script.contains("echo a\necho b"), "{script}");
         assert!(!script.contains('\r'), "{script}");
     }
@@ -689,7 +799,7 @@ mod tests {
 
     #[test]
     fn bash_launch_args_wraps_and_hides_user_command() {
-        let args = bash_launch_args(Path::new(r"D:\p"), "secret-cmd $(rm)");
+        let args = bash_launch_args(Path::new(r"D:\p"), "secret-cmd $(rm)", &[]);
         assert!(args.starts_with("-lc \"bash -l <(base64 -d<<<"), "{args}");
         assert!(args.ends_with(")\""), "{args}");
         assert!(!args.contains("secret-cmd"), "{args}");

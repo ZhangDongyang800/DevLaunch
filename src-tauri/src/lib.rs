@@ -7,6 +7,7 @@ pub mod hotkey;
 pub mod launcher;
 pub mod platform;
 pub mod tray;
+pub mod worktree;
 
 use config::AppConfig;
 use std::path::PathBuf;
@@ -19,6 +20,9 @@ pub struct AppState {
     pub path: PathBuf,
     pub hotkey: Mutex<Option<String>>,
     pub git_op: Mutex<()>,
+    /// 启动时配置文件读不出来 → 记录原因，本会话禁止任何写入（否则会用默认配置
+    /// 覆盖用户真实配置）。None = 正常。
+    pub config_read_blocked: Mutex<Option<String>>,
 }
 
 fn toggle_palette(app: &AppHandle) {
@@ -52,7 +56,24 @@ pub fn run() {
             if let Ok(enabled) = app.autolaunch().is_enabled() {
                 cfg.settings.autostart = enabled;
             }
-            if let Some(backup) = &loaded.corrupt_backup {
+            if let Some(reason) = &loaded.blocked {
+                launcher::notify(
+                    app.handle(),
+                    format!(
+                        "无法读取配置文件 {reason}；为避免用默认配置覆盖你已有的配置，本次启动不会保存任何改动。请关闭占用该文件的程序后重启 DevLaunch。"
+                    ),
+                );
+            } else if let Some(from) = &loaded.restored_from {
+                let detail = loaded
+                    .corrupt_backup
+                    .as_ref()
+                    .map(|b| format!("损坏原件已备份到 {}", b.display()))
+                    .unwrap_or_default();
+                launcher::notify(
+                    app.handle(),
+                    format!("配置文件解析失败，已自动从备份 {} 恢复。{detail}", from.display()),
+                );
+            } else if let Some(backup) = &loaded.corrupt_backup {
                 launcher::notify(
                     app.handle(),
                     format!("配置文件损坏，已备份到 {}，并恢复默认配置", backup.display()),
@@ -60,7 +81,13 @@ pub fn run() {
             }
             let hotkey_spec = cfg.settings.hotkey.clone();
             crate::git::set_configured_git(cfg.settings.git_path.as_deref());
-            app.manage(AppState { config: Mutex::new(cfg), path, hotkey: Mutex::new(Some(hotkey_spec.clone())), git_op: Mutex::new(()) });
+            app.manage(AppState {
+                config: Mutex::new(cfg),
+                path,
+                hotkey: Mutex::new(Some(hotkey_spec.clone())),
+                git_op: Mutex::new(()),
+                config_read_blocked: Mutex::new(loaded.blocked),
+            });
             app.handle().plugin(
                 tauri_plugin_global_shortcut::Builder::new()
                     .with_handler(|app, _shortcut, event| {
@@ -117,7 +144,6 @@ pub fn run() {
             commands::open_dir,
             commands::export_config_to,
             commands::import_config_from,
-            commands::export_project,
             commands::export_project_file,
             commands::read_project_template,
             commands::get_autostart,
@@ -149,6 +175,12 @@ pub fn run() {
             commands::git_pull,
             commands::git_push,
             commands::git_last_fetch,
+            commands::worktree_settings,
+            commands::git_worktrees,
+            commands::git_worktree_add,
+            commands::git_worktree_remove,
+            commands::git_worktree_prune,
+            commands::launch_worktree_cmd,
             commands::open_file,
             commands::get_git_info,
         ])

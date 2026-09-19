@@ -5,9 +5,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const CONFIG_VERSION: u32 = 6;
+pub const CONFIG_VERSION: u32 = 7;
 pub const MODERN_VERSION: u32 = 3;
-pub const TEMPLATE_VERSION: u32 = 3;
+pub const TEMPLATE_VERSION: u32 = 4;
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+D";
 
 fn default_hotkey() -> String {
@@ -36,6 +36,55 @@ pub struct Item {
     pub command: String,
 }
 
+/// 端口租约：git 知道 branch↔path，但端口必须跨创建/删除保持稳定，只能由配置持有。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeLease {
+    pub branch: String,
+    pub port: u16,
+}
+
+/// 按任务开发环境（git worktree）政策。
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorktreeSettings {
+    /// worktree 根目录；相对 rootDir 解析，缺失时用 `<repo 同级>/<目录名>-wt`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// allow-list：新建环境时从主工作区复制的相对路径；默认空 = 不复制任何文件。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub copy: Vec<String>,
+    /// 端口段起点；None = 不注入端口环境变量。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_base: Option<u16>,
+    /// 端口环境变量名，默认 `PORT`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub leases: Vec<WorktreeLease>,
+}
+
+impl WorktreeSettings {
+    pub const DEFAULT_PORT_KEY: &'static str = "PORT";
+    pub const DEFAULT_ROOT_SUFFIX: &'static str = "-wt";
+
+    pub fn effective_port_key(&self) -> &str {
+        match self.port_key.as_deref().map(str::trim) {
+            Some(k) if !k.is_empty() => k,
+            _ => Self::DEFAULT_PORT_KEY,
+        }
+    }
+
+    fn has_policy(&self) -> bool {
+        self.root.is_some() || !self.copy.is_empty() || self.port_base.is_some() || self.port_key.is_some()
+    }
+
+    /// 模板视图：保留政策、丢弃租约（租约是本机状态，不进 devlaunch.json）。
+    pub fn for_template(&self) -> Option<WorktreeSettings> {
+        self.has_policy().then(|| WorktreeSettings { leases: Vec::new(), ..self.clone() })
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
@@ -48,6 +97,9 @@ pub struct Project {
     pub last_launched_at: Option<u64>,
     #[serde(default)]
     pub items: Vec<Item>,
+    /// 缺失 = 该仓库未启用按任务环境。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeSettings>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -82,7 +134,70 @@ impl Default for AppConfig {
 
 pub struct LoadedConfig {
     pub config: AppConfig,
+    /// 磁盘内容损坏时，原件被备份到的路径。
     pub corrupt_backup: Option<PathBuf>,
+    /// 磁盘内容损坏时，成功从哪个备份恢复；None = 没有可用备份（回退默认值）。
+    pub restored_from: Option<PathBuf>,
+    /// 文件存在但读不出来（被别的进程独占、IO 错误）。此时内存里是默认配置，
+    /// 落盘会覆盖用户真实配置，所以整个会话进入写保护。
+    pub blocked: Option<String>,
+}
+
+/// 读取配置文件的结果：三态必须区分开，读失败绝不能当成「没有配置」。
+#[derive(Debug, PartialEq, Eq)]
+enum ReadOutcome {
+    Absent,
+    Failed(String),
+    Text(String),
+}
+
+/// 一次性的瞬时失败重试：Windows 上杀软/索引器短暂占用很常见。
+fn read_config_file(path: &Path) -> ReadOutcome {
+    let mut last = String::new();
+    for attempt in 0..3 {
+        match fs::read_to_string(path) {
+            Ok(text) => return ReadOutcome::Text(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // 目录项在也可能报 NotFound（例如目标是目录），所以再确认一次存在性。
+                return if fs::symlink_metadata(path).is_ok() {
+                    ReadOutcome::Failed(format!("{e}"))
+                } else {
+                    ReadOutcome::Absent
+                };
+            }
+            Err(e) => {
+                last = format!("{e}");
+                if attempt < 2 {
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                }
+            }
+        }
+    }
+    ReadOutcome::Failed(last)
+}
+
+/// 损坏时的最后手段：用最近的 `config.json.bak*` 备份（保存时滚动写入）。
+fn newest_readable_backup(path: &Path) -> Option<(AppConfig, PathBuf)> {
+    let dir = path.parent()?;
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let Ok(entries) = fs::read_dir(dir) else { return None };
+    let mut candidates: Vec<(std::time::SystemTime, PathBuf, AppConfig)> = Vec::new();
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if file_name == name || !file_name.starts_with(&name) || file_name.ends_with(".tmp") {
+            continue;
+        }
+        let p = entry.path();
+        let Ok(m) = entry.metadata() else { continue };
+        let Ok(mtime) = m.modified() else { continue };
+        if let ReadOutcome::Text(text) = read_config_file(&p) {
+            if let Ok(cfg) = parse_config(&text) {
+                candidates.push((mtime, p, cfg));
+            }
+        }
+    }
+    candidates.sort_by_key(|(t, _, _)| *t);
+    candidates.pop().map(|(_, p, cfg)| (cfg, p))
 }
 
 impl AppConfig {
@@ -95,22 +210,49 @@ impl AppConfig {
     }
 
     pub fn load_diagnostic(path: &Path) -> LoadedConfig {
-        match fs::read_to_string(path) {
-            Ok(text) => match parse_config(&text) {
-                Ok(config) => LoadedConfig { config, corrupt_backup: None },
+        let fallback = LoadedConfig {
+            config: AppConfig::new(),
+            corrupt_backup: None,
+            restored_from: None,
+            blocked: None,
+        };
+        match read_config_file(path) {
+            ReadOutcome::Absent => fallback,
+            ReadOutcome::Failed(e) => {
+                eprintln!("config read failed: {e}; refusing to write over it");
+                LoadedConfig { blocked: Some(e), ..fallback }
+            }
+            ReadOutcome::Text(text) => match parse_config(&text) {
+                Ok(config) => LoadedConfig { config, ..fallback },
                 Err(e) => {
-                    eprintln!("config parse failed: {e}; backing up and using defaults");
+                    eprintln!("config parse failed: {e}; backing up and recovering");
                     let corrupt_backup = backup_corrupt(path).ok();
-                    LoadedConfig { config: AppConfig::new(), corrupt_backup }
+                    match newest_readable_backup(path) {
+                        Some((config, from)) => LoadedConfig {
+                            config,
+                            restored_from: Some(from),
+                            corrupt_backup,
+                            blocked: None,
+                        },
+                        None => LoadedConfig { corrupt_backup, ..fallback },
+                    }
                 }
             },
-            Err(_) => LoadedConfig { config: AppConfig::new(), corrupt_backup: None },
         }
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
+        // 原子替换之前先留一份滚动备份：损坏/误写时才有东西可恢复。
+        if path.is_file() {
+            let _ = fs::copy(path, backup_path_of(path));
+        }
         save_json(self, path)
     }
+}
+
+pub fn backup_path_of(path: &Path) -> PathBuf {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!("{name}.bak"))
 }
 
 /// 空 id / 重复 id 补发 UUID，保证 id 可作为稳定标识使用。
@@ -284,6 +426,7 @@ impl LegacyProject {
             favorite: false,
             last_launched_at: None,
             items: self.groups.into_iter().filter_map(LegacyGroup::into_item).collect(),
+            worktree: None,
         }
     }
 }
@@ -366,7 +509,7 @@ fn rel_path(from: Option<&str>, to: Option<&str>) -> String {
     }
 }
 
-// ProjectTemplate v3
+// ProjectTemplate v4
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectTemplate {
@@ -376,6 +519,9 @@ pub struct ProjectTemplate {
     pub name: String,
     #[serde(default)]
     pub items: Vec<Item>,
+    /// 环境政策（root/copy/端口段）；租约不进模板，导出时已被丢弃。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeSettings>,
 }
 
 fn default_template_version() -> u32 {
@@ -384,7 +530,12 @@ fn default_template_version() -> u32 {
 
 impl ProjectTemplate {
     pub fn from_project(p: &Project) -> Self {
-        Self { version: TEMPLATE_VERSION, name: p.name.clone(), items: p.items.clone() }
+        Self {
+            version: TEMPLATE_VERSION,
+            name: p.name.clone(),
+            items: p.items.clone(),
+            worktree: p.worktree.as_ref().and_then(WorktreeSettings::for_template),
+        }
     }
 
     pub fn load(path: &Path) -> Result<ProjectTemplate, String> {
@@ -430,6 +581,7 @@ impl LegacyTemplate {
             version: TEMPLATE_VERSION,
             name: self.name,
             items: self.groups.into_iter().filter_map(LegacyGroup::into_item).collect(),
+            worktree: None,
         }
     }
 }
@@ -453,6 +605,7 @@ mod tests {
                 shell: Shell::Cmd,
                 command: "python app.py".into(),
             }],
+            worktree: None,
         }
     }
 
@@ -496,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn template_keeps_template_version_three() {
+    fn template_keeps_template_version_four() {
         let tpl = ProjectTemplate::from_project(&sample_project());
         assert_eq!(tpl.version, TEMPLATE_VERSION);
         let json = serde_json::to_string(&tpl).unwrap();
@@ -506,10 +659,10 @@ mod tests {
 
     #[test]
     fn too_new_rejected_per_file_type() {
-        assert!(parse_config(r#"{"version":7,"projects":[]}"#).is_err());
-        assert!(parse_config(r#"{"version":6,"projects":[]}"#).is_ok());
-        assert!(parse_template(r#"{"version":4,"name":"X","items":[]}"#).is_err());
-        assert!(parse_template(r#"{"version":3,"name":"X","items":[]}"#).is_ok());
+        assert!(parse_config(r#"{"version":8,"projects":[]}"#).is_err());
+        assert!(parse_config(r#"{"version":7,"projects":[]}"#).is_ok());
+        assert!(parse_template(r#"{"version":5,"name":"X","items":[]}"#).is_err());
+        assert!(parse_template(r#"{"version":4,"name":"X","items":[]}"#).is_ok());
     }
 
     #[test]
@@ -524,7 +677,7 @@ mod tests {
             "items":[{"id":"i1","name":"bash项","shell":"bash","command":"npm run dev"}]}]}"#;
         let cfg = parse_config(v4).unwrap();
         assert_eq!(cfg.version, CONFIG_VERSION);
-        assert_eq!(CONFIG_VERSION, 6);
+        assert_eq!(CONFIG_VERSION, 7);
         assert!(cfg.projects[0].favorite);
         assert_eq!(cfg.projects[0].items[0].shell, Shell::Bash);
         assert_eq!(cfg.projects[0].items[0].command, "npm run dev");
@@ -551,6 +704,67 @@ mod tests {
         assert_eq!(cfg.settings.git_path, None);
         assert!(cfg.projects[0].favorite);
         assert_eq!(cfg.projects[0].items[0].shell, Shell::Bash);
+    }
+
+    #[test]
+    fn v6_config_migrates_to_v7_without_worktree() {
+        let v6 = r#"{"version":6,"settings":{"autostart":false,"hotkey":"Ctrl+Alt+D","gitPath":"C:\\git.exe"},
+            "projects":[{"id":"p1","name":"X","rootDir":"D:\\p","favorite":true,
+            "items":[{"id":"i1","name":"bash项","shell":"bash","command":"npm run dev"}]}]}"#;
+        let cfg = parse_config(v6).unwrap();
+        assert_eq!(cfg.version, CONFIG_VERSION);
+        assert_eq!(cfg.settings.git_path.as_deref(), Some(r"C:\git.exe"));
+        assert_eq!(cfg.projects[0].worktree, None);
+        assert_eq!(cfg.projects[0].items[0].shell, Shell::Bash);
+    }
+
+    #[test]
+    fn worktree_settings_roundtrip_and_omit_empty_keys() {
+        let mut p = sample_project();
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("worktree"), "{json}");
+
+        p.worktree = Some(WorktreeSettings {
+            root: Some(".wt".into()),
+            copy: vec![".env".into()],
+            port_base: Some(5173),
+            port_key: None,
+            leases: vec![WorktreeLease { branch: "feature/x".into(), port: 5173 }],
+        });
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"root\":\".wt\""), "{json}");
+        assert!(json.contains("\"portBase\":5173"), "{json}");
+        assert!(json.contains("\"branch\":\"feature/x\""), "{json}");
+        assert!(!json.contains("portKey"), "{json}");
+        assert_eq!(serde_json::from_str::<Project>(&json).unwrap(), p);
+        assert_eq!(p.worktree.as_ref().unwrap().effective_port_key(), "PORT");
+    }
+
+    #[test]
+    fn template_carries_worktree_policy_but_strips_leases() {
+        let mut p = sample_project();
+        p.worktree = Some(WorktreeSettings {
+            root: None,
+            copy: vec![".env".into()],
+            port_base: Some(3000),
+            port_key: Some("WEB_PORT".into()),
+            leases: vec![WorktreeLease { branch: "a".into(), port: 3000 }],
+        });
+        let tpl = ProjectTemplate::from_project(&p);
+        let json = serde_json::to_string(&tpl).unwrap();
+        assert!(json.contains("\"copy\":[\".env\"]"), "{json}");
+        assert!(json.contains("\"portKey\":\"WEB_PORT\""), "{json}");
+        assert!(!json.contains("leases"), "{json}");
+        assert_eq!(tpl.worktree.as_ref().unwrap().leases, Vec::new());
+
+        // 只有租约、没有政策时不写 worktree 段
+        let mut lease_only = sample_project();
+        lease_only.worktree = Some(WorktreeSettings {
+            leases: vec![WorktreeLease { branch: "a".into(), port: 3000 }],
+            ..Default::default()
+        });
+        assert!(ProjectTemplate::from_project(&lease_only).worktree.is_none());
+        assert!(!serde_json::to_string(&ProjectTemplate::from_project(&lease_only)).unwrap().contains("worktree"));
     }
 
     #[test]
@@ -811,6 +1025,98 @@ mod tests {
         assert!(loaded.config.projects.is_empty());
         let backup = loaded.corrupt_backup.expect("corrupt backup path");
         assert!(backup.is_file());
+        assert!(loaded.blocked.is_none());
+        assert!(loaded.restored_from.is_none());
+    }
+
+    /// 三态之一：文件不存在 = 首次运行，正常用默认配置，且不进写保护。
+    #[test]
+    fn missing_config_is_not_a_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let loaded = AppConfig::load_diagnostic(&path);
+        assert!(loaded.blocked.is_none(), "{:?}", loaded.blocked);
+        assert!(loaded.corrupt_backup.is_none());
+        assert!(loaded.config.projects.is_empty());
+    }
+
+    /// 三态之二：文件存在但读不出来，绝不能当成「没有配置」。
+    #[test]
+    fn unreadable_config_is_reported_not_treated_as_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        // 用同名目录制造「存在但读不出来」：杀软/占用进程在 Windows 上就是这个效果。
+        let path = dir.path().join("config.json");
+        fs::create_dir(&path).unwrap();
+        let loaded = AppConfig::load_diagnostic(&path);
+        assert!(loaded.blocked.is_some(), "read failure must surface as blocked");
+        assert!(loaded.corrupt_backup.is_none());
+        // 目录还在，没被当成可覆盖的空配置
+        assert!(path.is_dir());
+    }
+
+    /// 三态之三：内容损坏时优先从备份恢复，而不是回退默认值。
+    #[test]
+    fn corrupt_config_restores_from_newest_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let older = dir.path().join("config.json.bak");
+        let good = r#"{"version":7,"settings":{"autostart":false,"hotkey":"Ctrl+Alt+D"},"projects":[{"id":"p1","name":"救回来","rootDir":"D:\\x","items":[]}]}"#;
+        fs::write(&older, good).unwrap();
+        fs::write(&path, "{ not valid json").unwrap();
+
+        let loaded = AppConfig::load_diagnostic(&path);
+        assert_eq!(loaded.config.projects.len(), 1);
+        assert_eq!(loaded.config.projects[0].name, "救回来");
+        assert_eq!(loaded.restored_from.as_deref(), Some(older.as_path()));
+        assert!(loaded.corrupt_backup.is_some());
+        assert_eq!(loaded.blocked, None);
+    }
+
+    /// 损坏且没有任何可用备份时才回退默认值（并保持 corrupt_backup 上报）。
+    #[test]
+    fn corrupt_config_without_backup_falls_back_to_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        fs::write(dir.path().join("config.json.bak"), "{ broken too").unwrap();
+        fs::write(&path, "{ not valid json").unwrap();
+        let loaded = AppConfig::load_diagnostic(&path);
+        assert!(loaded.restored_from.is_none());
+        assert!(loaded.config.projects.is_empty());
+        assert!(loaded.corrupt_backup.is_some());
+    }
+
+    /// 每次保存前留一份滚动备份，损坏/误写才有东西可恢复。
+    #[test]
+    fn save_keeps_previous_version_as_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut first = AppConfig::default();
+        first.projects.push(Project {
+            id: "p1".into(),
+            name: "第一版".into(),
+            root_dir: "D:\\x".into(),
+            favorite: false,
+            last_launched_at: None,
+            items: vec![],
+            worktree: None,
+        });
+        first.save(&path).unwrap();
+        assert!(!backup_path_of(&path).exists(), "首次保存没有旧版本可备份");
+        let mut second = first.clone();
+        second.projects[0].name = "第二版".into();
+        second.save(&path).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap().matches("第二版").count(), 1);
+        let bak = backup_path_of(&path);
+        assert!(fs::read_to_string(&bak).unwrap().contains("第一版"));
+    }
+
+    #[test]
+    fn read_outcome_classifies_absent_and_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        assert_eq!(read_config_file(&path), ReadOutcome::Absent);
+        fs::write(&path, "hi").unwrap();
+        assert_eq!(read_config_file(&path), ReadOutcome::Text("hi".into()));
     }
 
     #[test]

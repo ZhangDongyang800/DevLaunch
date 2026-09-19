@@ -11,6 +11,9 @@ import type {
   ProjectTemplate,
   PushResult,
   RepoStatus,
+  WorktreeAddOutcome,
+  WorktreeInfo,
+  WorktreeView,
 } from './types'
 
 export const getConfig = () => invoke<AppConfig>('get_config')
@@ -22,8 +25,6 @@ export const openDir = (path: string) => invoke<void>('open_dir', { path })
 export const listSubdirs = (path: string) => invoke<string[]>('list_subdirs', { path })
 export const exportConfigTo = (path: string) => invoke<void>('export_config_to', { path })
 export const importConfigFrom = (path: string) => invoke<void>('import_config_from', { path })
-export const exportProject = (projectId: string, path: string) =>
-  invoke<void>('export_project', { projectId, path })
 export const exportProjectFile = (projectId: string) =>
   invoke<string>('export_project_file', { projectId })
 export const readProjectTemplate = (path: string) =>
@@ -78,3 +79,14 @@ export const gitPull = (projectId: string) => invoke<void>('git_pull', { project
 export const gitPush = (projectId: string) => invoke<PushResult>('git_push', { projectId })
 export const gitLastFetch = (projectId: string) => invoke<number | null>('git_last_fetch', { projectId })
 export const getGitInfo = () => invoke<GitInfo>('get_git_info')
+
+export const worktreeSettings = (projectId: string) =>
+  invoke<WorktreeView>('worktree_settings', { projectId })
+export const gitWorktrees = (projectId: string) => invoke<WorktreeInfo[]>('git_worktrees', { projectId })
+export const gitWorktreeAdd = (projectId: string, branch: string, base?: string) =>
+  invoke<WorktreeAddOutcome>('git_worktree_add', { projectId, branch, base })
+export const gitWorktreeRemove = (projectId: string, branch: string, force: boolean) =>
+  invoke<void>('git_worktree_remove', { projectId, branch, force })
+export const gitWorktreePrune = (projectId: string) => invoke<string>('git_worktree_prune', { projectId })
+export const launchWorktree = (projectId: string, branch: string) =>
+  invoke<void>('launch_worktree_cmd', { projectId, branch })

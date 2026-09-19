@@ -3,6 +3,7 @@ export type View =
   | { name: 'editor'; projectId: string }
   | { name: 'scan' }
   | { name: 'git'; projectId?: string }
+  | { name: 'env'; projectId?: string }
   | { name: 'settings' }
 
 export type Shell = 'cmd' | 'powershell' | 'bash'
@@ -22,6 +23,7 @@ export interface Project {
   favorite: boolean
   lastLaunchedAt?: number | null
   items: Item[]
+  worktree?: WorktreeSettings | null
 }
 
 export interface Settings {
@@ -103,6 +105,42 @@ export interface BranchInfo {
   upstream: string | null
   ahead: number
   behind: number
+}
+
+export interface WorktreeLease {
+  branch: string
+  port: number
+}
+
+export interface WorktreeSettings {
+  root?: string | null
+  copy: string[]
+  portBase?: number | null
+  portKey?: string | null
+  leases: WorktreeLease[]
+}
+
+export interface WorktreeInfo {
+  path: string
+  head: string
+  branch: string | null
+  isMain: boolean
+  isDetached: boolean
+  isPrunable: boolean
+}
+
+export interface WorktreeAddOutcome {
+  path: string
+  branch: string
+  port: number | null
+  copied: number
+  skipped: string[]
+}
+
+export interface WorktreeView {
+  enabled: boolean
+  settings: WorktreeSettings
+  defaultRoot: string
 }
 
 export interface DiffLine {

@@ -71,16 +71,57 @@ mod tests {
         fs::write(&blocker, "x").unwrap();
         let path = blocker.join("nested").join("config.json");
         let initial = AppConfig::default();
-        let state = crate::AppState {
-            config: std::sync::Mutex::new(initial.clone()),
-            path,
-            hotkey: std::sync::Mutex::new(None),
-            git_op: std::sync::Mutex::new(()),
-        };
+        let state = test_state(initial.clone(), path);
         let mut next = AppConfig::default();
         next.projects.push(sample_project("p1"));
         assert!(apply_config(&state, next).is_err());
         assert_eq!(*state.config.lock().unwrap(), initial);
+    }
+
+    fn test_state(cfg: AppConfig, path: PathBuf) -> crate::AppState {
+        crate::AppState {
+            config: std::sync::Mutex::new(cfg),
+            path,
+            hotkey: std::sync::Mutex::new(None),
+            git_op: std::sync::Mutex::new(()),
+            config_read_blocked: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// 配置文件读不出来时（内存里是默认配置），任何写入都必须被拦下。
+    #[test]
+    fn blocked_config_refuses_every_write_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        fs::write(&path, "{\"version\":7,\"projects\":[{\"id\":\"p1\",\"name\":\"真实项目\",\"rootDir\":\"D:\\\\x\",\"items\":[]}]}").unwrap();
+        let state = test_state(AppConfig::default(), path.clone());
+        *state.config_read_blocked.lock().unwrap() = Some("另一个程序正在使用此文件".into());
+
+        let mut next = AppConfig::default();
+        next.projects.push(sample_project("p1"));
+        let err = apply_config(&state, next).unwrap_err();
+        assert!(err.contains("未保存"), "{err}");
+        assert!(ensure_config_writable(&state).is_err());
+        // 磁盘上的用户配置一字未动
+        assert!(fs::read_to_string(&path).unwrap().contains("真实项目"));
+    }
+
+    #[test]
+    fn unblocked_state_allows_writes_and_keeps_rolling_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let state = test_state(AppConfig::default(), path.clone());
+        let mut first = AppConfig::default();
+        first.projects.push(sample_project("p1"));
+        apply_config(&state, first).unwrap();
+        assert!(path.is_file());
+        // 第二次保存前应留下第一次内容的 .bak
+        let mut second = AppConfig::default();
+        second.projects.push(sample_project("p2"));
+        apply_config(&state, second).unwrap();
+        let bak = crate::config::backup_path_of(&path);
+        assert!(bak.is_file(), "rolling backup missing");
+        assert!(fs::read_to_string(bak).unwrap().contains("p1"));
     }
 
     #[test]
@@ -108,6 +149,7 @@ mod tests {
                 shell: Shell::Cmd,
                 command: "python app.py".into(),
             }],
+            worktree: None,
         }
     }
 
@@ -188,6 +230,7 @@ mod tests {
             favorite: false,
             last_launched_at: None,
             items: vec![],
+            worktree: None,
         });
         let got = scan_with_config(dir.path().to_str().unwrap(), &cfg).unwrap();
         assert_eq!(got.len(), 1);
@@ -268,6 +311,7 @@ pub fn save_config(app: AppHandle, state: State<AppState>, config: AppConfig) ->
 /// 唯一配置写入口：先校验，再落盘；落盘失败时回滚内存，避免内存/磁盘分叉。
 fn apply_config(state: &AppState, config: AppConfig) -> Result<(), String> {
     validate_config(&config)?;
+    ensure_config_writable(state)?;
     let mut guard = state.config.lock().map_err(|_| "配置状态不可用".to_string())?;
     let previous = guard.clone();
     *guard = config;
@@ -276,6 +320,21 @@ fn apply_config(state: &AppState, config: AppConfig) -> Result<(), String> {
         return Err(e);
     }
     Ok(())
+}
+
+/// 启动时配置文件「存在但读不出来」→ 内存里是默认配置，写盘就会覆盖用户真实数据。
+/// 这种状态一旦确立，整个会话只读，直到用户修好占用后重启。
+fn ensure_config_writable(state: &AppState) -> Result<(), String> {
+    let blocked = state
+        .config_read_blocked
+        .lock()
+        .map_err(|_| "配置状态不可用".to_string())?;
+    match blocked.as_ref() {
+        Some(reason) => Err(format!(
+            "配置文件无法读取（{reason}），为避免覆盖你原有的配置，本次修改未保存；请关闭占用 config.json 的程序后重启 DevLaunch"
+        )),
+        None => Ok(()),
+    }
 }
 
 pub fn now_secs() -> u64 {
@@ -296,6 +355,9 @@ pub fn touch_last_launched(cfg: &mut AppConfig, project_id: &str, ts: u64) -> bo
 /// 启动成功后 best-effort 记录；失败不影响启动。
 pub(crate) fn record_launch(app: &AppHandle, project_id: &str) {
     let Some(state) = app.try_state::<AppState>() else { return };
+    if ensure_config_writable(&state).is_err() {
+        return;
+    }
     let mut guard = state.config.lock().unwrap();
     if touch_last_launched(&mut guard, project_id, now_secs()) {
         if let Err(e) = guard.save(&state.path) {
@@ -314,6 +376,7 @@ pub fn hide_palette(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn set_hotkey(app: AppHandle, state: State<AppState>, hotkey: String) -> Result<(), String> {
+    ensure_config_writable(&state)?;
     let spec = hotkey.trim().to_string();
     let new_shortcut = crate::hotkey::parse(&spec)?;
     let old = state.hotkey.lock().unwrap().clone();
@@ -408,12 +471,6 @@ pub fn open_dir(path: String) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub fn export_project(state: State<AppState>, project_id: String, path: String) -> Result<(), String> {
-    let cfg = state.config.lock().unwrap().clone();
-    export_project_to(&cfg, &project_id, Path::new(&path))
-}
-
 pub fn export_project_to(cfg: &AppConfig, project_id: &str, path: &Path) -> Result<(), String> {
     let project = cfg
         .projects
@@ -462,7 +519,13 @@ pub fn import_config_from(app: AppHandle, state: State<AppState>, path: String) 
             return Err(format!("导入失败：{e}"));
         }
     }
-    backup_config_file(&state.path);
+    // 导入会整份替换配置：先留下可恢复的时间戳备份，备份失败就不动现状。
+    if state.path.is_file() && backup_config_file(&state.path).is_none() {
+        if new_hotkey != old_hotkey {
+            let _ = crate::hotkey::register(&app, &old_hotkey);
+        }
+        return Err(format!("导入已取消：无法备份现有配置 {}", state.path.display()));
+    }
     let git_path = cfg.settings.git_path.clone();
     if let Err(e) = apply_config(&state, cfg) {
         if new_hotkey != old_hotkey {
@@ -666,9 +729,23 @@ pub fn git_file_diff(
     if path.trim().is_empty() {
         return Err("文件路径为空".into());
     }
+    repo_relative(&path)?;
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
     git::file_diff(&dir, &path, staged, ignore_whitespace, full_context)
+}
+
+/// 前端传来的仓库内相对路径：拒绝绝对路径与 `..`，否则 `dir.join(path)` 会跳出仓库。
+fn repo_relative(path: &str) -> Result<(), String> {
+    let p = Path::new(path);
+    if p.is_absolute()
+        || p
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::Prefix(_) | std::path::Component::RootDir))
+    {
+        return Err(format!("非法文件路径：{path}"));
+    }
+    Ok(())
 }
 
 fn git_lock<'a>(state: &'a State<'_, AppState>) -> Result<std::sync::MutexGuard<'a, ()>, String> {
@@ -828,8 +905,129 @@ pub fn git_last_fetch(state: State<'_, AppState>, project_id: String) -> Result<
     Ok(crate::git_write::last_fetch(&dir))
 }
 
+/// 环境设置（未启用时是默认值）+ 生效的默认环境根目录，供环境页显示。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeView {
+    pub enabled: bool,
+    pub settings: crate::config::WorktreeSettings,
+    pub default_root: String,
+}
+
+fn worktree_of(
+    cfg: &AppConfig,
+    project_id: &str,
+) -> Result<(PathBuf, crate::config::WorktreeSettings, bool), String> {
+    let dir = project_dir(cfg, project_id)?;
+    let stored = cfg
+        .projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .and_then(|p| p.worktree.clone());
+    let enabled = stored.is_some();
+    Ok((dir, stored.unwrap_or_default(), enabled))
+}
+
+/// 租约写回配置（与 lastLaunchedAt 同一单一写者路径）。
+fn update_leases<F: FnOnce(&mut Vec<crate::config::WorktreeLease>)>(
+    state: &AppState,
+    project_id: &str,
+    f: F,
+) -> Result<(), String> {
+    let mut cfg = state.config.lock().unwrap().clone();
+    match cfg.projects.iter_mut().find(|p| p.id == project_id) {
+        Some(p) => {
+            let Some(settings) = p.worktree.as_mut() else { return Ok(()) };
+            f(&mut settings.leases);
+        }
+        None => return Err(format!("项目不存在：{project_id}")),
+    }
+    apply_config(state, cfg)
+}
+
+#[tauri::command(async)]
+pub fn worktree_settings(state: State<'_, AppState>, project_id: String) -> Result<WorktreeView, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let (dir, settings, enabled) = worktree_of(&cfg, &project_id)?;
+    let default_root =
+        crate::worktree::default_wt_root(&dir, settings.root.as_deref()).to_string_lossy().to_string();
+    Ok(WorktreeView { enabled, settings, default_root })
+}
+
+#[tauri::command(async)]
+pub fn git_worktrees(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<crate::worktree::WorktreeInfo>, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let (dir, _, _) = worktree_of(&cfg, &project_id)?;
+    crate::worktree::list(&dir)
+}
+
+#[tauri::command(async)]
+pub fn git_worktree_add(
+    state: State<'_, AppState>,
+    project_id: String,
+    branch: String,
+    base: Option<String>,
+) -> Result<crate::worktree::AddOutcome, String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let (dir, settings, enabled) = worktree_of(&cfg, &project_id)?;
+    if !enabled {
+        return Err("该项目还没有环境设置，请先在环境页启用".into());
+    }
+    let outcome = crate::worktree::add(&dir, &settings, &branch, base.as_deref())?;
+    if let Some(port) = outcome.port {
+        update_leases(&state, &project_id, |leases| {
+            crate::worktree::upsert_lease(leases, &outcome.branch, port)
+        })?;
+    }
+    Ok(outcome)
+}
+
+#[tauri::command(async)]
+pub fn git_worktree_remove(
+    state: State<'_, AppState>,
+    project_id: String,
+    branch: String,
+    force: Option<bool>,
+) -> Result<(), String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let (dir, _, _) = worktree_of(&cfg, &project_id)?;
+    crate::worktree::remove(&dir, &branch, force.unwrap_or(false))?;
+    update_leases(&state, &project_id, |leases| *leases = crate::worktree::release_lease(leases, &branch))?;
+    Ok(())
+}
+
+/// 只清理「目录已被手工删除」的失效记录，不碰存在的工作树。
+#[tauri::command(async)]
+pub fn git_worktree_prune(state: State<'_, AppState>, project_id: String) -> Result<String, String> {
+    let _guard = git_lock(&state)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let (dir, _, _) = worktree_of(&cfg, &project_id)?;
+    crate::worktree::prune(&dir)
+}
+
+#[tauri::command]
+pub fn launch_worktree_cmd(
+    app: AppHandle,
+    state: State<AppState>,
+    project_id: String,
+    branch: String,
+) -> Result<(), String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let result = launcher::launch_worktree(&app, &cfg, &project_id, &branch);
+    if result.is_ok() {
+        record_launch(&app, &project_id);
+    }
+    result
+}
+
 #[tauri::command]
 pub fn open_file(state: State<AppState>, project_id: String, path: String) -> Result<(), String> {
+    repo_relative(&path)?;
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
     let p = dir.join(&path);
@@ -872,15 +1070,16 @@ pub fn normalize_for_compare(path: &str) -> String {
 
 #[tauri::command]
 pub fn set_autostart(app: AppHandle, state: State<AppState>, enabled: bool) -> Result<(), String> {
+    ensure_config_writable(&state)?;
     let auto = app.autolaunch();
     if enabled {
         auto.enable().map_err(|e| e.to_string())?;
     } else {
         auto.disable().map_err(|e| e.to_string())?;
     }
-    if let Ok(mut guard) = state.config.lock() {
-        guard.settings.autostart = enabled;
-        let _ = guard.save(&state.path);
-    }
-    Ok(())
+    // 与其他写入口一致：走 apply_config（校验 + 落盘失败回滚 + 写保护）。
+    // 落盘失败也不会留下错乱状态——下次启动时 settings.autostart 会由注册表回填。
+    let mut cfg = state.config.lock().map_err(|_| "配置状态不可用".to_string())?.clone();
+    cfg.settings.autostart = enabled;
+    apply_config(&state, cfg)
 }
