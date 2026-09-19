@@ -10,7 +10,7 @@ import { gitError, refreshStatuses, statuses } from '../gitStore'
 const emit = defineEmits<{
   edit: [projectId: string]
   scan: []
-  'git-open': [projectId: string]
+  'open-git': [projectId: string]
   notify: [msg: string, kind?: 'ok' | 'err']
 }>()
 
@@ -98,11 +98,11 @@ function createProject() {
 
 <template>
   <div class="home">
-    <div class="home-head">
+    <div class="page-head">
       <h1>启动台</h1>
-      <span class="row">
+      <span class="page-meta">{{ projects.length }} PROJECTS</span>
+      <span class="toolbar">
         <input v-model="query" class="inline filter-input mono" placeholder="过滤项目…" spellcheck="false" />
-        <span class="home-count mono">{{ projects.length }} PROJECTS</span>
         <button class="bordered" @click="emit('scan')">扫描工作区</button>
         <button class="bordered" @click="createProject">+ 新建项目</button>
       </span>
@@ -138,8 +138,6 @@ function createProject() {
             <div class="pc-head">
               <span class="pc-name">{{ p.name || '未命名项目' }}</span>
               <span class="pc-path mono">{{ p.rootDir || '未设置根目录' }}</span>
-              <span class="spacer" />
-              <GitBadge :status="statuses[p.id]" @open="emit('git-open', p.id)" />
             </div>
             <div class="pc-pipeline">
               <template v-for="(it, i) in p.items" :key="it.id">
@@ -150,11 +148,13 @@ function createProject() {
             </div>
           </div>
 
+          <GitBadge :status="statuses[p.id]" @open="emit('open-git', p.id)" />
+
           <div class="pc-side">
             <button class="ghost star" :class="{ on: p.favorite }" title="收藏置顶" @click.stop="toggleFavorite(p)">
               {{ p.favorite ? '★' : '☆' }}
             </button>
-            <button class="ghost" @click.stop="open(p.rootDir)">打开目录</button>
+            <button class="ghost" @click.stop="open(p.rootDir)">目录</button>
             <button class="ghost" @click.stop="emit('edit', p.id)">编辑</button>
             <button
               class="danger ghost"

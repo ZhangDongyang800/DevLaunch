@@ -1,18 +1,35 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import { load, config } from './store'
 import { refreshStatuses } from './gitStore'
 import type { View, ToastKind } from './types'
 import TitleBar from './components/TitleBar.vue'
+import SideBar from './components/SideBar.vue'
 import HomeView from './views/HomeView.vue'
 import GitView from './views/GitView.vue'
+import EnvView from './views/EnvView.vue'
 import ScanView from './views/ScanView.vue'
 import EditorView from './views/EditorView.vue'
 import SettingsView from './views/SettingsView.vue'
 
 const view = ref<View>({ name: 'home' })
 const toast = ref('')
+
+const NAV_TITLES: Record<string, string> = {
+  home: '项目',
+  env: '环境',
+  git: 'Git',
+  settings: '设置',
+  scan: '扫描工作区',
+  editor: '编辑器',
+}
+
+const pageTitle = computed(() => `DevLaunch — ${NAV_TITLES[view.value.name] ?? 'DevLaunch'}`)
+
+function go(next: 'home' | 'env' | 'git' | 'settings') {
+  view.value = { name: next } as View
+}
 const toastKind = ref<ToastKind>('ok')
 const loadError = ref('')
 let toastTimer: number | undefined
@@ -57,30 +74,24 @@ onUnmounted(() => {
 
 <template>
   <div class="app" v-if="config">
-    <TitleBar>
-      <button class="tb-nav-item" :class="{ active: view.name === 'home' }" @click="view = { name: 'home' }">
-        项目
-      </button>
-      <button class="tb-nav-item" :class="{ active: view.name === 'git' }" @click="view = { name: 'git' }">
-        Git
-      </button>
-      <button class="tb-nav-item" :class="{ active: view.name === 'settings' }" @click="view = { name: 'settings' }">
-        设置
-      </button>
-    </TitleBar>
-    <main class="main">
-      <HomeView
-        v-if="view.name === 'home'"
-        @edit="view = { name: 'editor', projectId: $event }"
-        @scan="view = { name: 'scan' }"
-        @open-git="view = { name: 'git', projectId: $event }"
-        @notify="showToast"
-      />
-      <GitView v-else-if="view.name === 'git'" :project-id="view.projectId" />
-      <ScanView v-else-if="view.name === 'scan'" @back="view = { name: 'home' }" @notify="showToast" />
-      <EditorView v-else-if="view.name === 'editor'" :project-id="view.projectId" @back="view = { name: 'home' }" @notify="showToast" />
-      <SettingsView v-else @notify="showToast" />
-    </main>
+    <SideBar :active="view.name" @go="go" />
+    <div class="content">
+      <TitleBar :title="pageTitle" />
+      <main class="main">
+        <HomeView
+          v-if="view.name === 'home'"
+          @edit="view = { name: 'editor', projectId: $event }"
+          @scan="view = { name: 'scan' }"
+          @open-git="view = { name: 'git', projectId: $event }"
+          @notify="showToast"
+        />
+        <GitView v-else-if="view.name === 'git'" :project-id="view.projectId" />
+        <EnvView v-else-if="view.name === 'env'" :project-id="view.projectId" @notify="showToast" />
+        <ScanView v-else-if="view.name === 'scan'" @back="view = { name: 'home' }" @notify="showToast" />
+        <EditorView v-else-if="view.name === 'editor'" :project-id="view.projectId" @back="view = { name: 'home' }" @notify="showToast" />
+        <SettingsView v-else @notify="showToast" />
+      </main>
+    </div>
     <Transition name="toast">
       <div v-if="toast" class="toast" :class="toastKind">{{ toast }}</div>
     </Transition>

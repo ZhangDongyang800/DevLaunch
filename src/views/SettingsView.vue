@@ -177,9 +177,9 @@ onUnmounted(() => window.removeEventListener('keydown', onRecordKeydown, true))
 
 <template>
   <div class="settings" v-if="config">
-    <div class="home-head">
+    <div class="page-head">
       <h1>设置</h1>
-      <span class="home-count mono">SETTINGS</span>
+      <span class="page-meta">SETTINGS</span>
     </div>
 
     <div class="list">

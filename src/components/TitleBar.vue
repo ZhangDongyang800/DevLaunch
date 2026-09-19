@@ -4,6 +4,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 
 const win = getCurrentWindow()
 
+defineProps<{ title?: string }>()
+
 const isMax = ref(false)
 let unlisten: (() => void) | undefined
 
@@ -35,15 +37,9 @@ function close() {
 
 <template>
   <header class="titlebar">
-    <div class="brand" data-tauri-drag-region>
-      <span class="brand-dot" />
-      <span>DevLaunch</span>
-      <span class="brand-cursor" />
+    <div class="tb-drag" data-tauri-drag-region>
+      <span class="tb-title" data-tauri-drag-region>{{ title }}</span>
     </div>
-    <nav class="tb-nav">
-      <slot />
-    </nav>
-    <div class="tb-spacer" data-tauri-drag-region />
     <div class="win-controls">
       <button class="win-btn" title="最小化" @click="minimize">
         <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" stroke-width="1.2" /></svg>
