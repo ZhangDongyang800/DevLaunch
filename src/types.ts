@@ -129,6 +129,12 @@ export interface WorktreeInfo {
   isPrunable: boolean
 }
 
+export interface WorktreeStatus {
+  path: string
+  branch: string | null
+  status: RepoStatus
+}
+
 export interface WorktreeAddOutcome {
   path: string
   branch: string

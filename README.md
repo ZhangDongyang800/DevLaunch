@@ -66,7 +66,7 @@ Of course, it cannot fix bugs or other development problems for you. It only wor
 
 - **Tray resident**: launch any project from the right-click menu, with optional launch at login
 
-- **Global shortcut**: press `Ctrl+Alt+D` to open a search palette — type to filter, press Enter to launch. Press `→` to drill into a project and launch a single item. Rebindable in Settings.
+- **Global shortcut**: press `Ctrl+Alt+D` to open a search palette — type to filter, press Enter to launch. Press `→` to drill into a project: environments of that repo are listed first (`⎇ branch` + its port) and Enter launches that environment; below them are the individual startup items. Rebindable in Settings.
 
 - **Favorites and recents**: pin frequently used projects; launched projects are ordered by recency.
 

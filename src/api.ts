@@ -13,6 +13,7 @@ import type {
   RepoStatus,
   WorktreeAddOutcome,
   WorktreeInfo,
+  WorktreeStatus,
   WorktreeView,
 } from './types'
 
@@ -83,6 +84,8 @@ export const getGitInfo = () => invoke<GitInfo>('get_git_info')
 export const worktreeSettings = (projectId: string) =>
   invoke<WorktreeView>('worktree_settings', { projectId })
 export const gitWorktrees = (projectId: string) => invoke<WorktreeInfo[]>('git_worktrees', { projectId })
+export const gitWorktreeStatuses = (projectId: string) =>
+  invoke<WorktreeStatus[]>('worktree_statuses', { projectId })
 export const gitWorktreeAdd = (projectId: string, branch: string, base?: string) =>
   invoke<WorktreeAddOutcome>('git_worktree_add', { projectId, branch, base })
 export const gitWorktreeRemove = (projectId: string, branch: string, force: boolean) =>

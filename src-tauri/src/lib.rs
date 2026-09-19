@@ -177,6 +177,7 @@ pub fn run() {
             commands::git_last_fetch,
             commands::worktree_settings,
             commands::git_worktrees,
+            commands::worktree_statuses,
             commands::git_worktree_add,
             commands::git_worktree_remove,
             commands::git_worktree_prune,

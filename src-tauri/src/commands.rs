@@ -628,14 +628,8 @@ pub fn project_dir(cfg: &AppConfig, project_id: &str) -> Result<PathBuf, String>
     Ok(PathBuf::from(&p.root_dir))
 }
 
-#[tauri::command(async)]
-pub fn git_statuses(state: State<'_, AppState>, project_ids: Vec<String>) -> Vec<git::RepoStatus> {
-    let cfg = state.config.lock().unwrap().clone();
-    let targets: Vec<(String, Result<PathBuf, String>)> = project_ids
-        .iter()
-        .map(|id| (id.clone(), project_dir(&cfg, id)))
-        .collect();
-
+/// 并发跑多个仓库状态的共用骨架（4 线程、有界，调用方负责解析目录）。
+fn statuses_parallel(targets: Vec<(String, Result<PathBuf, String>)>) -> Vec<git::RepoStatus> {
     let n = targets.len();
     let results: std::sync::Mutex<Vec<Option<git::RepoStatus>>> =
         std::sync::Mutex::new((0..n).map(|_| None).collect());
@@ -659,6 +653,47 @@ pub fn git_statuses(state: State<'_, AppState>, project_ids: Vec<String>) -> Vec
         }
     });
     results.into_inner().unwrap().into_iter().flatten().collect()
+}
+
+#[tauri::command(async)]
+pub fn git_statuses(state: State<'_, AppState>, project_ids: Vec<String>) -> Vec<git::RepoStatus> {
+    let cfg = state.config.lock().unwrap().clone();
+    statuses_parallel(
+        project_ids
+            .iter()
+            .map(|id| (id.clone(), project_dir(&cfg, id)))
+            .collect(),
+    )
+}
+
+/// 环境页用：一个 worktree 一行脏状态。目录由 `git worktree list` 解析，
+/// 前端只传 projectId——与其余 git 命令同一边界。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeStatus {
+    pub path: String,
+    pub branch: Option<String>,
+    pub status: git::RepoStatus,
+}
+
+#[tauri::command(async)]
+pub fn worktree_statuses(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<WorktreeStatus>, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let (dir, _, _) = worktree_of(&cfg, &project_id)?;
+    let entries = crate::worktree::list(&dir)?;
+    let targets: Vec<(String, Result<PathBuf, String>)> = entries
+        .iter()
+        .map(|w| (w.path.clone(), Ok(PathBuf::from(&w.path))))
+        .collect();
+    let statuses = statuses_parallel(targets);
+    Ok(entries
+        .iter()
+        .zip(statuses)
+        .map(|(w, status)| WorktreeStatus { path: w.path.clone(), branch: w.branch.clone(), status })
+        .collect())
 }
 
 #[tauri::command(async)]

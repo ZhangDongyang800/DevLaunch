@@ -5,12 +5,13 @@ import {
   gitWorktreeAdd,
   gitWorktreePrune,
   gitWorktreeRemove,
+  gitWorktreeStatuses,
   gitWorktrees,
   launchWorktree,
   openDir,
   worktreeSettings,
 } from '../api'
-import type { WorktreeInfo, WorktreeSettings } from '../types'
+import type { RepoStatus, WorktreeInfo, WorktreeSettings } from '../types'
 
 const emit = defineEmits<{ (e: 'notify', msg: string, kind?: 'ok' | 'err'): void }>()
 const props = defineProps<{ projectId?: string }>()
@@ -21,7 +22,10 @@ const selected = computed(() => projects.value.find((p) => p.id === selectedId.v
 
 const view = ref<{ enabled: boolean; settings: WorktreeSettings; defaultRoot: string } | null>(null)
 const worktrees = ref<WorktreeInfo[]>([])
+// 每个 worktree 的脏状态，按后端返回的路径原样作键（两边同源，不做前端归一化）
+const statuses = ref<Record<string, RepoStatus>>({})
 const busy = ref(false)
+let statusSeq = 0
 
 // 设置草稿（保存后写回配置）
 const draft = reactive<{ root: string; portBase: string; portKey: string; copy: string }>({
@@ -45,6 +49,7 @@ async function refresh(id: string) {
   if (!id) {
     view.value = null
     worktrees.value = []
+    statuses.value = {}
     return
   }
   try {
@@ -52,10 +57,26 @@ async function refresh(id: string) {
     view.value = v
     worktrees.value = list
     fillDraft(v.settings)
+    void refreshStatuses(id)
   } catch (e) {
     emit('notify', `${e}`, 'err')
     view.value = null
     worktrees.value = []
+    statuses.value = {}
+  }
+}
+
+// 脏标记是附加信息：失败只退回「—」，不影响环境列表。
+async function refreshStatuses(id: string) {
+  const mine = ++statusSeq
+  try {
+    const got = await gitWorktreeStatuses(id)
+    if (mine !== statusSeq) return
+    const next: Record<string, RepoStatus> = {}
+    for (const w of got) next[w.path] = w.status
+    statuses.value = next
+  } catch {
+    if (mine === statusSeq) statuses.value = {}
   }
 }
 
@@ -83,6 +104,29 @@ const hasPrunable = computed(() => worktrees.value.some((w) => w.isPrunable))
 function portOf(branch: string | null): number | null {
   if (!branch) return null
   return view.value?.settings.leases.find((l) => l.branch === branch)?.port ?? null
+}
+
+interface EnvBadge {
+  text: string
+  cls: string
+  title: string
+}
+
+// 每个环境一行脏状态徽章：加载中不显示，取不到/不可用显示「—」，冲突与未完成操作优先于计数
+function badgeOf(w: WorktreeInfo): EnvBadge | null {
+  if (w.isPrunable) return null
+  const s = statuses.value[w.path]
+  if (!s) return { text: '…', cls: 'env-mute', title: '状态读取中' }
+  if (s.error || !s.isRepo) return { text: '—', cls: 'env-mute', title: s.error || '不是 git 仓库' }
+  if (s.conflicts) return { text: `⚠ 冲突 ${s.conflicts}`, cls: 'env-bad', title: '有冲突文件未解决' }
+  if (s.operation) return { text: s.operation, cls: 'env-bad', title: `进行中的操作：${s.operation}` }
+  const n = s.staged + s.unstaged + s.untracked
+  if (!n) return { text: '干净', cls: 'env-mute', title: '工作树干净' }
+  return {
+    text: `●${n}`,
+    cls: 'env-dirty',
+    title: `已暂存 ${s.staged} · 未暂存 ${s.unstaged} · 未跟踪 ${s.untracked}`,
+  }
 }
 
 async function saveSettings() {
@@ -252,6 +296,9 @@ const isGitRepo = computed(() => !!selected.value && view.value !== null)
             <span class="badge">主工作区</span>
             <span class="env-branch mono">{{ mainWt.branch || (mainWt.isDetached ? '分离 HEAD' : '') }}</span>
             <span class="env-path mono" :title="mainWt.path">{{ mainWt.path }}</span>
+            <span v-if="badgeOf(mainWt)" class="badge env-badge" :class="badgeOf(mainWt)!.cls" :title="badgeOf(mainWt)!.title">
+              {{ badgeOf(mainWt)!.text }}
+            </span>
             <span class="grow"></span>
             <button class="ghost" @click="openPath(mainWt.path)">打开目录</button>
           </div>
@@ -263,6 +310,9 @@ const isGitRepo = computed(() => !!selected.value && view.value !== null)
             <span class="env-path mono" :title="w.path">{{ w.path }}</span>
             <span v-if="portOf(w.branch) != null" class="env-port mono">:{{ portOf(w.branch) }}</span>
             <span v-if="w.isPrunable" class="badge env-bad">失效</span>
+            <span v-if="badgeOf(w)" class="badge env-badge" :class="badgeOf(w)!.cls" :title="badgeOf(w)!.title">
+              {{ badgeOf(w)!.text }}
+            </span>
             <span class="env-sha mono">{{ shortHead(w) }}</span>
             <span class="grow"></span>
             <template v-if="!w.isPrunable && w.branch">
@@ -352,6 +402,10 @@ const isGitRepo = computed(() => !!selected.value && view.value !== null)
 .env-repo { min-width: 180px; }
 .env-off { color: var(--faint); border-color: var(--border-strong); }
 .env-bad { color: var(--danger); border-color: var(--danger); background: var(--danger-dim); }
+/* 与首页 / Git 页的脏标记同一套颜色语言：琥珀=有改动，弱化=干净或不可读 */
+.env-badge { flex-shrink: 0; }
+.env-dirty { color: #e0b341; border-color: rgba(224, 179, 65, 0.4); }
+.env-mute { color: var(--muted); }
 
 .env-row {
   display: flex;
