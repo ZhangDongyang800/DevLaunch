@@ -35,6 +35,11 @@ const loading = ref(false)
 const error = ref('')
 const ignoreWhitespace = ref(false)
 const fullContext = ref(false)
+// 原生 checkbox 的勾选态存在 DOM 里，Vue 不会因为「值没变」去纠正它；
+// 每次写完 +1 强制重建复选框，失败时不会留下与数据不符的勾选状态。
+const rev = ref(0)
+// 快速连点时后到的旧响应不能覆盖先到的新响应。
+let diffSeq = 0
 
 watch(() => props.projectId, reset)
 
@@ -45,20 +50,25 @@ function reset() {
   error.value = ''
   ignoreWhitespace.value = false
   fullContext.value = false
+  diffSeq++
 }
 
 async function openFile(path: string, staged: boolean) {
+  const seq = ++diffSeq
   selPath.value = path
   selStaged.value = staged
   loading.value = true
   error.value = ''
   diff.value = null
   try {
-    diff.value = await gitFileDiff(props.projectId, path, staged, ignoreWhitespace.value, fullContext.value)
+    const got = await gitFileDiff(props.projectId, path, staged, ignoreWhitespace.value, fullContext.value)
+    if (seq !== diffSeq) return
+    diff.value = got
   } catch (e) {
+    if (seq !== diffSeq) return
     error.value = `${e}`
   } finally {
-    loading.value = false
+    if (seq === diffSeq) loading.value = false
   }
 }
 
@@ -71,8 +81,8 @@ function toggleWhitespace() {
   void reload()
 }
 
-function expandAll() {
-  fullContext.value = true
+function toggleFullContext() {
+  fullContext.value = !fullContext.value
   void reload()
 }
 
@@ -88,6 +98,8 @@ async function action(fn: () => Promise<void>) {
     await fn()
   } catch (e) {
     emit('notify', `${e}`, 'err')
+  } finally {
+    rev.value++
   }
 }
 
@@ -139,7 +151,13 @@ function statusLetter(f: FileChange): string {
               :style="{ paddingLeft: 8 + row.indent * 14 + 'px' }"
               @click="openFile(row.path, true)"
             >
-              <input type="checkbox" checked :disabled="busy" @click.stop="action(() => unstage(projectId, [row.path]))" />
+              <input
+                type="checkbox"
+                checked
+                :key="'scb' + row.path + rev"
+                :disabled="busy"
+                @click.stop="action(() => unstage(projectId, [row.path]))"
+              />
               <span class="file-status mono">{{ fileMap.get(row.path) ? statusLetter(fileMap.get(row.path)!) : 'M' }}</span>
               <span class="file-name mono">{{ row.name }}</span>
             </div>
@@ -177,7 +195,12 @@ function statusLetter(f: FileChange): string {
               :style="{ paddingLeft: 8 + row.indent * 14 + 'px' }"
               @click="openFile(row.path, false)"
             >
-              <input type="checkbox" :disabled="busy" @click.stop="action(() => stage(projectId, [row.path]))" />
+              <input
+                type="checkbox"
+                :key="'ucb' + row.path + rev"
+                :disabled="busy"
+                @click.stop="action(() => stage(projectId, [row.path]))"
+              />
               <span class="file-status mono">{{ fileMap.get(row.path) ? statusLetter(fileMap.get(row.path)!) : '?' }}</span>
               <span class="file-name mono">{{ row.name }}</span>
               <button
@@ -205,7 +228,7 @@ function statusLetter(f: FileChange): string {
         :ignore-whitespace="ignoreWhitespace"
         :full-context="fullContext"
         @toggle-whitespace="toggleWhitespace"
-        @expand-all="expandAll"
+        @expand-all="toggleFullContext"
       />
     </div>
 

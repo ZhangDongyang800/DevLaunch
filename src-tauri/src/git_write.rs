@@ -224,6 +224,124 @@ mod tests {
         dir
     }
 
+    /// 写一个 pre-commit 钩子（Git for Windows 用自带的 sh 执行）。
+    fn write_hook(dir: &Path, script: &str) {
+        let hooks = dir.join(".git").join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        std::fs::write(hooks.join("pre-commit"), format!("#!/bin/sh\n{script}\nexit 0\n")).unwrap();
+    }
+
+    #[test]
+    fn commit_with_huge_hook_output_and_stdin_does_not_deadlock() {
+        if crate::git::resolve_git_path().is_none() {
+            return;
+        }
+        let repo = init_repo();
+        let dir = repo.path();
+        std::fs::write(dir.join("a.txt"), "churn\n").unwrap();
+        crate::git::run_git(dir, &["add", "a.txt"]).unwrap();
+        // 远超 64KB 管道缓冲区的钩子输出 + 超过管道缓冲的 stdin 提交信息：
+        // 读线程必须先于写 stdin 启动，否则两边互等。
+        write_hook(
+            dir,
+            "i=0\nwhile [ $i -lt 2000 ]; do echo \"chatter $i ---------------------------------------------\"; echo \"noise $i ---------------------------------------------\" >&2; i=$((i+1)); done",
+        );
+        let msg = format!("chatty hook\n{}", "x".repeat(70 * 1024));
+        let start = std::time::Instant::now();
+        let hash = commit(dir, &msg, false).expect("commit must not deadlock");
+        assert_eq!(hash.trim().len(), 40);
+        assert!(start.elapsed() < Duration::from_secs(60), "commit took {:?}", start.elapsed());
+        assert_eq!(crate::git::git_log(dir, 5, 0).unwrap().len(), 2);
+        let body = crate::git::run_git(dir, &["log", "-1", "--format=%s"]).unwrap();
+        assert!(body.starts_with("chatty hook"), "message lost: {body}");
+    }
+
+    #[test]
+    fn empty_commit_error_comes_from_stdout_not_hook_noise() {
+        if crate::git::resolve_git_path().is_none() {
+            return;
+        }
+        let repo = init_repo();
+        let dir = repo.path();
+        write_hook(dir, "echo hook-noise-line");
+        // 没有暂存改动：git 把结论写在 stdout，stderr 只有钩子噪音。
+        let err = commit(dir, "nothing staged", false).unwrap_err();
+        assert!(!err.contains("hook-noise-line"), "{err}");
+        assert!(err.contains("no changes added") || err.contains("nothing to commit"), "{err}");
+    }
+
+    #[test]
+    fn timed_out_git_kills_hook_tree_and_stale_index_lock() {
+        if crate::git::resolve_git_path().is_none() {
+            return;
+        }
+        let repo = init_repo();
+        let dir = repo.path();
+        std::fs::write(dir.join("a.txt"), "hang\n").unwrap();
+        crate::git::run_git(dir, &["add", "a.txt"]).unwrap();
+        // 后台子进程在 4 秒后留下标记文件：如果强杀只杀掉 git.exe，它就会活下来。
+        write_hook(
+            dir,
+            "(sleep 4 && echo late > .git/late-marker) &\n: > .git/index.lock\nsleep 120",
+        );
+
+        let start = std::time::Instant::now();
+        let err = crate::git::run_git_opts(
+            dir,
+            &["commit", "-m", "hangs"],
+            GitRunOpts { allow_prompt: false, timeout: Duration::from_secs(2), stdin_data: None },
+        )
+        .expect_err("hook hangs, so the run must be interrupted");
+        assert!(err.contains("超时"), "{err}");
+        // 只杀 git.exe 的话，sh/sleep 还活着并握着管道，这里会等满 120s。
+        assert!(start.elapsed() < Duration::from_secs(25), "took {:?}", start.elapsed());
+        // 强杀留下的 index.lock 必须被清掉，否则之后所有写操作永久失败。
+        assert!(!dir.join(".git").join("index.lock").exists(), "index.lock left behind");
+        // 等到后台标记本该出现的时间点之后，确认进程树里没留下任何活口。
+        while start.elapsed() < Duration::from_secs(7) {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        assert!(!dir.join(".git").join("late-marker").exists(), "钩子的孙进程未被清理");
+        // 仓库仍可写：证明没有残留锁或僵尸进程占住。
+        stage(dir, &["a.txt".into()]).expect("stage after the killed commit");
+    }
+
+    #[test]
+    fn fetch_and_push_work_against_local_remote() {
+        if crate::git::resolve_git_path().is_none() {
+            return;
+        }
+        let upstream = init_repo();
+        // 推送到对端已检出的分支需要放开默认保护
+        git(upstream.path(), &["config", "receive.denyCurrentBranch", "ignore"]);
+        let parent = tempfile::tempdir().unwrap();
+        git(parent.path(), &["clone", "--quiet", &upstream.path().to_string_lossy(), "work"]);
+        let work = parent.path().join("work");
+        git(&work, &["config", "user.email", "t@e.com"]);
+        git(&work, &["config", "user.name", "T"]);
+
+        std::fs::write(work.join("b.txt"), "new\n").unwrap();
+        crate::git::run_git(&work, &["add", "b.txt"]).unwrap();
+        commit(&work, "from clone", false).unwrap();
+        let pushed = push(&work).expect("push 到已有 upstream");
+        assert!(!pushed.set_upstream, "{pushed:?}");
+
+        // 新分支没有 upstream → 自动 -u origin <branch>
+        crate::git::run_git(&work, &["switch", "-c", "feature"]).unwrap();
+        let second = push(&work).expect("push 自动设置 upstream");
+        assert_eq!(second.branch, "feature");
+        assert!(second.set_upstream, "{second:?}");
+
+        // 对端从克隆库往回 fetch（origin 指回 work）
+        git(upstream.path(), &["remote", "add", "origin", &work.to_string_lossy()]);
+        fetch(upstream.path()).expect("fetch");
+        assert!(last_fetch(upstream.path()).is_some(), "FETCH_HEAD mtime missing");
+        assert!(crate::git::run_git(upstream.path(), &["rev-parse", "--verify", "refs/remotes/origin/feature"]).is_ok());
+        // 推送本身也已经落到对端的本地分支
+        crate::git::run_git(upstream.path(), &["rev-parse", "--verify", "feature"])
+            .expect("feature 应当已经到对端");
+    }
+
     #[test]
     fn validate_paths_rejects_empty() {
         assert!(validate_paths(&[]).is_err());

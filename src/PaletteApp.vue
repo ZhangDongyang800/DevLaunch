@@ -121,6 +121,8 @@ function itemLabel(it: Item): string {
 }
 
 function onKeydown(e: KeyboardEvent) {
+  // 输入法组合期间不接管按键：否则中文输入按 Esc 取消候选会直接关掉面板。
+  if (e.isComposing) return
   if (e.key === 'Escape') {
     if (drilled.value) {
       back()
@@ -129,7 +131,6 @@ function onKeydown(e: KeyboardEvent) {
     void hidePalette()
     return
   }
-  if (e.isComposing) return
   const len = drilled.value ? items.value.length : projects.value.length
   if (e.key === 'ArrowDown') {
     e.preventDefault()
@@ -177,8 +178,14 @@ let unlisten: (() => void) | undefined
 
 onMounted(async () => {
   await reload()
-  unlisten = await listen('palette-shown', () => {
-    void reload()
+  unlisten = await listen('palette-shown', async () => {
+    await reload()
+    // 重开时钻入过的项目可能已被删除/改名，别停在过期数据上
+    if (drilled.value && !cfg.value?.projects.some((p) => p.id === drilled.value?.id)) {
+      drilled.value = null
+    }
+    await nextTick()
+    inputRef.value?.focus()
   })
 })
 

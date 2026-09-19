@@ -32,7 +32,13 @@ pub fn menu_label(name: &str) -> String {
 }
 
 pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let cfg = app.state::<AppState>().config.lock().unwrap().clone();
+    // 锁被污染（别处 panic 过）时不能 panic：release 构建是 panic=abort，会直接杀掉进程。
+    let cfg = app
+        .state::<AppState>()
+        .config
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
     let menu = Menu::new(app)?;
     for p in &cfg.projects {
         let sub = Submenu::with_id(app, format!("proj-{}", p.id), menu_label(&p.name), true)?;
@@ -49,10 +55,17 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 }
 
 pub fn rebuild(app: &AppHandle) {
-    if let Some(tray) = app.tray_by_id("main-tray") {
-        if let Ok(menu) = build_menu(app) {
-            let _ = tray.set_menu(Some(menu));
+    let Some(tray) = app.tray_by_id("main-tray") else {
+        eprintln!("tray rebuild skipped: tray icon not found");
+        return;
+    };
+    match build_menu(app) {
+        Ok(menu) => {
+            if let Err(e) = tray.set_menu(Some(menu)) {
+                eprintln!("tray set_menu failed: {e}");
+            }
         }
+        Err(e) => eprintln!("tray menu rebuild failed: {e}"),
     }
 }
 
@@ -74,7 +87,7 @@ fn handle_menu(app: &AppHandle, id: String) {
         let app = app.clone();
         let project_id = project_id.to_string();
         std::thread::spawn(move || {
-            let cfg = app.state::<AppState>().config.lock().unwrap().clone();
+            let Ok(cfg) = app.state::<AppState>().config.lock().map(|g| g.clone()) else { return };
             if let Err(e) = launcher::launch_project(&app, &cfg, &project_id) {
                 eprintln!("launch failed: {e}");
                 show_main_window(&app);
@@ -85,11 +98,15 @@ fn handle_menu(app: &AppHandle, id: String) {
         });
     }
     if let Some(project_id) = id.strip_prefix("open:") {
-        let app = app.clone();
-        let project_id = project_id.to_string();
-        let cfg = app.state::<AppState>().config.lock().unwrap().clone();
-        if let Some(p) = cfg.projects.iter().find(|p| p.id == project_id) {
-            let _ = commands::open_dir(p.root_dir.clone());
+        // 托盘点击没有任何窗口反馈，失败必须用系统通知说出来，否则就是「点了没反应」。
+        let cfg = match app.state::<AppState>().config.lock() {
+            Ok(g) => g.clone(),
+            Err(_) => return,
+        };
+        let Some(p) = cfg.projects.iter().find(|p| p.id == project_id) else { return };
+        let root_dir = p.root_dir.clone();
+        if let Err(e) = commands::open_dir(root_dir.clone()) {
+            launcher::notify(app, format!("打开目录失败：{e}（{root_dir}）"));
         }
     }
 }

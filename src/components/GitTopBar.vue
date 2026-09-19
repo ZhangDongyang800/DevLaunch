@@ -77,7 +77,6 @@ function pickRepo(id: string) {
   repoOpen.value = false
   repoQuery.value = ''
   void refreshRepo(id)
-  void loadLastFetch(id)
 }
 
 function closeRepo() {
@@ -116,30 +115,38 @@ async function confirmDirty() {
 }
 
 async function onBranchChange(e: Event) {
-  const value = (e.target as HTMLSelectElement).value
-  if (!selected.value || blocked.value) return
+  const select = e.target as HTMLSelectElement
+  const value = select.value
+  // select 绑定的是 :value，值没变时 Vue 不会把 DOM 恢复回去：
+  // 取消或失败时必须手动复位，否则界面显示的分支和实际分支不一致。
+  const restore = () => {
+    select.value = currentBranch.value
+  }
+  if (!selected.value || blocked.value) return restore()
   if (value.startsWith('remote:')) {
     const remoteName = value.slice('remote:'.length)
     const short = remoteName.split('/').slice(1).join('/')
     const { confirm } = await import('@tauri-apps/plugin-dialog')
     const ok = await confirm(`基于 ${remoteName} 新建本地分支 ${short} 并切换？`, { title: '检出远程分支' })
-    if (!ok) return
+    if (!ok) return restore()
     try {
       await createBranch(selected.value.id, short, true)
       emit('notify', `已切换到 ${short}`)
     } catch (err) {
       emit('notify', `${err}`, 'err')
     }
+    restore()
     return
   }
   if (value === currentBranch.value) return
-  if (!(await confirmDirty())) return
+  if (!(await confirmDirty())) return restore()
   try {
     await switchBranch(selected.value.id, value)
     emit('notify', `已切换到 ${value}`)
   } catch (err) {
     emit('notify', `${err}`, 'err')
   }
+  restore()
 }
 
 async function submitAction() {
@@ -279,7 +286,7 @@ async function refreshAll() {
       <button class="ghost" :disabled="blocked" title="合并到当前分支" @click="open('merge')">合并</button>
       <button class="ghost" :disabled="blocked" title="把当前分支变基到…" @click="open('rebase')">变基</button>
       <button class="ghost" :disabled="blocked" title="重命名当前分支" @click="open('rename')">重命名</button>
-      <button class="ghost danger" title="删除分支" @click="open('delete')">删除</button>
+      <button class="ghost danger" :disabled="blocked" title="删除分支" @click="open('delete')">删除</button>
     </span>
 
     <span class="v-spacer" />

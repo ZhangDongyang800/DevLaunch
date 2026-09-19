@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { config, persist } from '../store'
 import { detectProject, exportProjectFile, getConfig, launchItem, listSubdirs, readProjectTemplate } from '../api'
 import { newId, newItem, type DetectResult, type Item } from '../types'
@@ -61,6 +61,11 @@ async function refreshSubdirs() {
 watch(() => project.value?.rootDir, () => {
   clearTimeout(subdirsTimer)
   subdirsTimer = window.setTimeout(() => refreshSubdirs(), 300)
+})
+// 离开编辑页后这些定时器还会各打一次 IPC / 改一次状态，结果落回已卸载的组件上
+onUnmounted(() => {
+  clearTimeout(subdirsTimer)
+  clearTimeout(confirmExportTimer)
 })
 
 function openCombo(itemId: string) {
@@ -218,8 +223,9 @@ async function doExportToRoot() {
     return
   }
   try {
-    await exportProjectFile(project.value.id)
-    emit('notify', `已导出到 ${path}`)
+    // 用后端返回的实际路径提示，前端拼的 projectFilePath() 只是预判
+    const written = await exportProjectFile(project.value.id)
+    emit('notify', `已导出到 ${written}`)
   } catch (e) {
     emit('notify', `导出失败：${e}`, 'err')
   }

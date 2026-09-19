@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -97,8 +98,16 @@ pub fn friendly_git_error(stderr: &str) -> String {
     if is_not_repo(stderr) {
         return "不是 git 仓库".into();
     }
-    let last = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("git 执行失败");
-    last.trim().to_string()
+    let lines: Vec<&str> = stderr.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    // 优先取最后一条 error:/fatal:——hook 的输出与 hint: 续行常排在真正的错误后面。
+    let picked = lines
+        .iter()
+        .rev()
+        .find(|l| l.starts_with("error:") || l.starts_with("fatal:"))
+        .or_else(|| lines.last())
+        .copied()
+        .unwrap_or("git 执行失败");
+    picked.to_string()
 }
 
 #[cfg(windows)]
@@ -107,6 +116,110 @@ fn hide_console(cmd: &mut Command) {
 }
 #[cfg(not(windows))]
 fn hide_console(_cmd: &mut Command) {}
+
+/// 管道读取缓冲：读线程把数据搬进共享缓冲，主线程随时可取已读到的部分。
+/// 这样即便孙进程继承了管道句柄、读线程等不到 EOF，调用方也不会被永久卡住。
+struct PipeBuf {
+    data: Arc<Mutex<VecDeque<u8>>>,
+    done: Arc<AtomicBool>,
+}
+
+impl PipeBuf {
+    /// `head`：保留前 `limit` 字节并在达到上限时置位 `capped`（stdout，超出即无意义）。
+    /// `tail`：保留最后 `limit` 字节（stderr，git 的 error:/fatal: 总在末尾）。
+    fn spawn<R: Read + Send + 'static>(
+        mut pipe: R,
+        limit: usize,
+        head: Option<Arc<AtomicBool>>,
+    ) -> Self {
+        let data = Arc::new(Mutex::new(VecDeque::new()));
+        let done = Arc::new(AtomicBool::new(false));
+        let (buf, flag) = (Arc::clone(&data), Arc::clone(&done));
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 16 * 1024];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let reached_limit = {
+                            let mut v = buf.lock().unwrap_or_else(|e| e.into_inner());
+                            if head.is_some() {
+                                let room = limit.saturating_sub(v.len());
+                                v.extend(&chunk[..n.min(room)]);
+                                v.len() >= limit
+                            } else {
+                                v.extend(&chunk[..n]);
+                                while v.len() > limit {
+                                    v.pop_front();
+                                }
+                                false
+                            }
+                        };
+                        if reached_limit {
+                            if let Some(c) = &head {
+                                c.store(true, Ordering::SeqCst);
+                            }
+                            break;
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+            flag.store(true, Ordering::SeqCst);
+        });
+        Self { data, done }
+    }
+
+    /// 最多再等 grace；到期则返回已读到的部分，读线程留在后台自然收尾。
+    fn collect(&self, grace: Duration) -> Vec<u8> {
+        let deadline = Instant::now() + grace;
+        while !self.done.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.data.lock().map(|v| v.iter().copied().collect()).unwrap_or_default()
+    }
+}
+
+/// 有界等待一个子进程退出，超时后强杀它自己。
+fn wait_bounded(child: &mut std::process::Child, limit: Duration) {
+    let start = Instant::now();
+    while child.try_wait().ok().flatten().is_none() {
+        if start.elapsed() >= limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// 强杀 git **及其子进程树**：hook、Git Credential Manager、ssh 都是 git 的子进程。
+/// 只杀 git.exe 会留下继承了管道句柄的孙进程，读端永远不 EOF，`git_op` 锁会被永久占住。
+#[cfg(windows)]
+fn kill_tree(child: &mut std::process::Child) {
+    let pid = child.id();
+    if pid > 0 {
+        if let Ok(mut tk) = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+        {
+            wait_bounded(&mut tk, Duration::from_secs(5));
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(not(windows))]
+fn kill_tree(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
 
 /// git 子进程运行档。`allow_prompt=false` 时禁用终端提示（读取与本地写），
 /// `true` 时留给 Git Credential Manager（网络操作）。
@@ -122,8 +235,20 @@ impl Default for GitRunOpts {
     }
 }
 
+/// 一次 git 运行的原始产物；管道已由读线程接管，取用一律有界。
+struct GitRaw {
+    out: Vec<u8>,
+    err: Vec<u8>,
+    capped: bool,
+    exit_ok: bool,
+    timed_out: bool,
+    started_at: std::time::SystemTime,
+}
+
+/// 只读/内部用：不做锁文件清理（清理路径自身也要跑 git，避免递归）。
 pub(crate) fn run_git_with(program: &Path, dir: &Path, args: &[&str]) -> Result<String, String> {
-    run_git_with_opts(program, dir, args, GitRunOpts::default())
+    let raw = spawn_git(program, dir, args, GitRunOpts::default())?;
+    raw.into_result(None)
 }
 
 pub(crate) fn run_git_with_opts(
@@ -132,6 +257,46 @@ pub(crate) fn run_git_with_opts(
     args: &[&str],
     opts: GitRunOpts,
 ) -> Result<String, String> {
+    let raw = spawn_git(program, dir, args, opts)?;
+    // 写操作被强杀后可能留下 index.lock，不清会导致后续所有写一直失败。
+    let note = raw
+        .timed_out
+        .then(|| cleanup_killed_index_lock(program, dir, raw.started_at))
+        .flatten();
+    raw.into_result(note)
+}
+
+impl GitRaw {
+    fn into_result(self, note: Option<String>) -> Result<String, String> {
+        let stderr = String::from_utf8_lossy(&self.err).into_owned();
+        // git 把「no changes added to commit」这类结论写在 stdout，此时 stderr 里
+        // 往往只有钩子噪音；拿 stdout 的最后一行兜底，否则用户看到的是无意义的一行。
+        let stderr = if !self.exit_ok && !has_diagnostic_line(&stderr) {
+            let stdout = String::from_utf8_lossy(&self.out).into_owned();
+            match stdout.lines().rev().map(str::trim).find(|l| !l.is_empty()) {
+                Some(last) => last.to_string(),
+                None => stderr,
+            }
+        } else {
+            stderr
+        };
+        capped_result(self.out, self.capped, self.exit_ok, self.timed_out, &stderr, note)
+    }
+}
+
+fn has_diagnostic_line(stderr: &str) -> bool {
+    stderr.lines().any(|l| {
+        let l = l.trim();
+        l.starts_with("error:") || l.starts_with("fatal:")
+    })
+}
+
+fn spawn_git(
+    program: &Path,
+    dir: &Path,
+    args: &[&str],
+    opts: GitRunOpts,
+) -> Result<GitRaw, String> {
     let mut cmd = Command::new(program);
     cmd.arg("-C")
         .arg(dir)
@@ -150,44 +315,38 @@ pub(crate) fn run_git_with_opts(
     }
     hide_console(&mut cmd);
 
+    let started_at = std::time::SystemTime::now();
     let mut child = cmd.spawn().map_err(|e| format!("启动 git 失败：{e}"))?;
+
+    // 读线程必须先于 stdin 写入启动：git 或它的 hook 可能在读 stdin 之前就把
+    // stdout/stderr 灌满管道缓冲区，此时同步写 stdin 会双向死锁。
+    let out_pipe = child.stdout.take().expect("piped stdout");
+    let err_pipe = child.stderr.take().expect("piped stderr");
+    let capped = Arc::new(AtomicBool::new(false));
+    // 多读 1 字节用于区分「正好到上限」与「被截断」。
+    let out_buf = PipeBuf::spawn(
+        out_pipe,
+        (MAX_OUTPUT_BYTES + 1) as usize,
+        Some(Arc::clone(&capped)),
+    );
+    let err_buf = PipeBuf::spawn(err_pipe, 64 * 1024, None);
     if let Some(data) = opts.stdin_data {
         if let Some(mut si) = child.stdin.take() {
-            use std::io::Write;
-            let _ = si.write_all(&data);
-            // si 在此 drop，关闭 stdin
+            std::thread::spawn(move || {
+                use std::io::Write;
+                let _ = si.write_all(&data);
+                // si 在此 drop，关闭 stdin，git 才会继续往下走
+            });
         }
     }
-    let mut out_pipe = child.stdout.take().expect("piped stdout");
-    let mut err_pipe = child.stderr.take().expect("piped stderr");
-    let capped = Arc::new(AtomicBool::new(false));
-    let capped_out = Arc::clone(&capped);
-    let out_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        // Read one byte past the cap so we can tell truncation from a clean EOF.
-        let _ = out_pipe
-            .by_ref()
-            .take(MAX_OUTPUT_BYTES + 1)
-            .read_to_end(&mut buf);
-        if buf.len() as u64 > MAX_OUTPUT_BYTES {
-            capped_out.store(true, Ordering::SeqCst);
-        }
-        buf
-    });
-    let err_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = err_pipe.by_ref().take(64 * 1024).read_to_end(&mut buf);
-        buf
-    });
 
     let start = Instant::now();
     let mut exit_ok = false;
     let mut timed_out = false;
     loop {
         if capped.load(Ordering::SeqCst) {
-            // Output cap hit: kill early instead of waiting for the timeout.
-            let _ = child.kill();
-            let _ = child.wait();
+            // 输出超限：提前结束，不再等超时。
+            kill_tree(&mut child);
             break;
         }
         match child.try_wait() {
@@ -197,26 +356,30 @@ pub(crate) fn run_git_with_opts(
             }
             Ok(None) => {
                 if start.elapsed() >= opts.timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_tree(&mut child);
                     timed_out = true;
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_tree(&mut child);
                 timed_out = true;
                 break;
             }
         }
     }
 
-    let out = out_handle.join().unwrap_or_default();
-    let err = err_handle.join().unwrap_or_default();
-    let stderr = String::from_utf8_lossy(&err).into_owned();
-    capped_result(out, capped.load(Ordering::SeqCst), exit_ok, timed_out, &stderr)
+    // 进程已退出或已被强杀；再给读线程一个有界窗口收尾管道里剩下的数据。
+    let grace = if timed_out { Duration::from_millis(500) } else { Duration::from_secs(2) };
+    Ok(GitRaw {
+        out: out_buf.collect(grace),
+        err: err_buf.collect(grace),
+        capped: capped.load(Ordering::SeqCst),
+        exit_ok,
+        timed_out,
+        started_at,
+    })
 }
 
 pub fn run_git_opts(dir: &Path, args: &[&str], opts: GitRunOpts) -> Result<String, String> {
@@ -232,18 +395,63 @@ fn capped_result(
     exit_ok: bool,
     timed_out: bool,
     stderr: &str,
+    note: Option<String>,
 ) -> Result<String, String> {
     if capped {
         let end = (MAX_OUTPUT_BYTES as usize).min(out.len());
         return Ok(String::from_utf8_lossy(&out[..end]).into_owned());
     }
     if timed_out {
-        return Err("git 执行超时".into());
+        let mut msg = "git 执行超时（已强制结束 Git 进程）".to_string();
+        if let Some(note) = note {
+            msg.push('；');
+            msg.push_str(&note);
+        }
+        return Err(msg);
     }
     if exit_ok {
         Ok(String::from_utf8_lossy(&out).into_owned())
     } else {
         Err(friendly_git_error(stderr))
+    }
+}
+
+/// Windows 下以独占方式试探打开文件：别的进程还持有它时返回 false。
+#[cfg(windows)]
+fn file_is_free(path: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(0)
+        .open(path)
+        .is_ok()
+}
+
+#[cfg(not(windows))]
+fn file_is_free(_path: &Path) -> bool {
+    true
+}
+
+/// 被我们强杀的 git 不会走自己的清理路径，可能留下 `.git/index.lock`，
+/// 之后所有写操作都会一直报「锁已存在」。只在超时强杀后调用，且两道防线：
+/// 锁必须晚于本次运行开始（早于它的属于别的进程），并且当前无人持有句柄。
+fn cleanup_killed_index_lock(program: &Path, dir: &Path, started_at: std::time::SystemTime) -> Option<String> {
+    let Ok(git_dir) = run_git_with(program, dir, &["rev-parse", "--absolute-git-dir"]) else {
+        return None;
+    };
+    let lock = PathBuf::from(git_dir.trim()).join("index.lock");
+    let Ok(meta) = std::fs::metadata(&lock) else { return None };
+    let Ok(mtime) = meta.modified() else { return None };
+    if mtime < started_at {
+        return Some("索引锁由其他 Git 操作持有，未清理".into());
+    }
+    if !file_is_free(&lock) {
+        return Some("索引锁仍被占用，未清理".into());
+    }
+    match std::fs::remove_file(&lock) {
+        Ok(_) => Some("已清理中断残留的 index.lock".into()),
+        Err(_) => Some(format!("索引锁未释放，请手动删除：{}", lock.display())),
     }
 }
 
@@ -1173,19 +1381,37 @@ mod tests {
     fn capped_result_truncates_instead_of_erroring() {
         let mut buf = vec![b'a'; (MAX_OUTPUT_BYTES + 1) as usize];
         buf[..3].copy_from_slice(b"abc");
-        let got = capped_result(buf, true, false, false, "fatal: broken pipe").unwrap();
+        let got = capped_result(buf, true, false, false, "fatal: broken pipe", None).unwrap();
         assert_eq!(got.len(), MAX_OUTPUT_BYTES as usize);
         assert!(got.starts_with("abc"));
     }
 
     #[test]
     fn capped_result_passes_through_success_timeout_and_error() {
-        assert_eq!(capped_result(b"ok".to_vec(), false, true, false, "").unwrap(), "ok");
-        assert_eq!(capped_result(Vec::new(), false, false, true, "").unwrap_err(), "git 执行超时");
+        assert_eq!(capped_result(b"ok".to_vec(), false, true, false, "", None).unwrap(), "ok");
+        assert!(
+            capped_result(Vec::new(), false, false, true, "", None).unwrap_err().contains("超时")
+        );
         assert_eq!(
-            capped_result(Vec::new(), false, false, false, "fatal: boom").unwrap_err(),
+            capped_result(Vec::new(), false, false, false, "fatal: boom", None).unwrap_err(),
             "fatal: boom"
         );
+    }
+
+    #[test]
+    fn timeout_error_carries_lock_cleanup_note() {
+        let err = capped_result(Vec::new(), false, false, true, "", Some("已清理中断残留的 index.lock".into())).unwrap_err();
+        assert!(err.contains("超时"), "{err}");
+        assert!(err.contains("index.lock"), "{err}");
+    }
+
+    #[test]
+    fn friendly_error_prefers_last_error_line_over_hook_noise() {
+        let stderr = "fatal: needed a message\nerror: There was a problem with the pre-commit hook.\nhint: disable the hook\n";
+        assert_eq!(friendly_git_error(stderr), "error: There was a problem with the pre-commit hook.");
+        assert_eq!(friendly_git_error("some noise\nfatal: bad object"), "fatal: bad object");
+        assert_eq!(friendly_git_error("plain words only"), "plain words only");
+        assert_eq!(friendly_git_error(""), "git 执行失败");
     }
 
     #[test]

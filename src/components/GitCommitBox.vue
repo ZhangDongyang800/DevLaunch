@@ -46,7 +46,7 @@ async function doCommitAndPush() {
     <textarea
       v-model="message"
       class="commit-message"
-      rows="3"
+      rows="2"
       :disabled="blocked"
       placeholder="提交信息…（Ctrl+Enter 提交）"
       spellcheck="false"

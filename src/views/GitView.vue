@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { config } from '../store'
-import { branches, loadLastFetch, refreshRepo, refreshStatuses, selectedRepoId, statuses, tab } from '../gitStore'
+import { branches, gitError, loadLastFetch, refreshRepo, refreshStatuses, selectedRepoId, statuses, tab } from '../gitStore'
 import GitTopBar from '../components/GitTopBar.vue'
 import GitChanges from '../components/GitChanges.vue'
 import GitHistory from '../components/GitHistory.vue'
@@ -58,13 +58,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 
 <template>
   <div class="git-page">
-    <div class="home-head">
+    <div class="page-head">
       <h1>Git</h1>
-      <span class="row">
-        <span class="home-count mono">{{ projects.length }} REPOS</span>
-        <span v-if="selected && branches[selected.id]?.length" class="home-count mono">
-          {{ branches[selected.id].length }} BRANCHES
-        </span>
+      <span class="page-meta">{{ projects.length }} REPOS</span>
+      <span v-if="selected && branches[selected.id]?.length" class="page-meta">
+        {{ branches[selected.id].length }} BRANCHES
       </span>
     </div>
 
@@ -74,6 +72,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
     </div>
 
     <template v-else>
+      <div v-if="gitError" class="git-global-error">{{ gitError }}</div>
       <GitTopBar :projects="projects" />
 
       <div class="git-tabs">

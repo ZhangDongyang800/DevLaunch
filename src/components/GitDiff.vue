@@ -54,7 +54,7 @@ const del = computed(() => props.file?.deletions ?? 0)
         <span class="diff-stat-del">−{{ del }}</span>
         <span class="v-spacer" />
         <button class="ghost" :class="{ on: ignoreWhitespace }" @click="emit('toggle-whitespace')">隐藏空白</button>
-        <button class="ghost" :class="{ on: fullContext }" @click="emit('expand-all')">展开全部</button>
+        <button class="ghost" :class="{ on: fullContext }" @click="emit('expand-all')">{{ fullContext ? '收起全部' : '展开全部' }}</button>
         <button class="ghost" :class="{ on: split }" @click="split = !split">{{ split ? '统一' : '左右' }}</button>
       </div>
       <div v-if="file.binary" class="gc-empty">二进制文件，无法显示差异</div>

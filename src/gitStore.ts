@@ -33,9 +33,14 @@ export const selectedRepoId = ref('')
 export const tab = ref<'changes' | 'history'>('changes')
 
 let refreshing = false
+// 刷新进行中又被叫到时记下最后一次请求，结束后补一次，而不是把这次丢掉。
+let pendingIds: string[] | null = null
 
 export async function refreshStatuses(projectIds: string[]): Promise<void> {
-  if (refreshing) return
+  if (refreshing) {
+    pendingIds = projectIds
+    return
+  }
   refreshing = true
   try {
     const list = await gitStatuses(projectIds)
@@ -47,6 +52,9 @@ export async function refreshStatuses(projectIds: string[]): Promise<void> {
     gitError.value = `${e}`
   } finally {
     refreshing = false
+    const again = pendingIds
+    pendingIds = null
+    if (again) void refreshStatuses(again)
   }
 }
 
@@ -80,13 +88,23 @@ export async function refreshBranches(projectId: string): Promise<void> {
 }
 
 export async function refreshRepo(projectId: string): Promise<void> {
-  await Promise.all([refreshStatus(projectId), refreshBranches(projectId), loadLog(projectId, true)])
+  gitError.value = ''
+  // 这里是 fire-and-forget 的调用点：任何一路失败都必须落到可见的 gitError，
+  // 否则会变成一个没人处理的 rejection（用户看到的就是「点了没反应」）。
+  const results = await Promise.allSettled([
+    refreshStatus(projectId),
+    refreshBranches(projectId),
+    loadLog(projectId, true),
+  ])
+  const failed = results.find((r) => r.status === 'rejected')
+  if (failed && failed.status === 'rejected') gitError.value = `${failed.reason}`
 }
 
 export const busy = ref(false)
 
 async function runWrite(projectId: string, fn: () => Promise<unknown>): Promise<void> {
-  if (busy.value) return
+  // 忙时必须报错而不是静默返回，否则用户以为点了没反应。
+  if (busy.value) throw new Error('已有 Git 操作进行中，请稍候')
   busy.value = true
   try {
     await fn()

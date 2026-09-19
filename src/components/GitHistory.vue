@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { gitCommitDetail } from '../api'
 import type { CommitDetail } from '../types'
 import {
+  busy,
   cherryPickCommit,
   loadFileHistory,
   loadLog,
@@ -42,6 +43,21 @@ const menu = ref<{ x: number; y: number; hash: string } | null>(null)
 const fileMenu = ref<{ x: number; y: number; path: string } | null>(null)
 
 onMounted(() => reload())
+
+// 顶栏换仓库时本组件不会重建，必须自己把上一个仓库的选中项/详情/筛选清掉。
+watch(
+  () => props.projectId,
+  () => {
+    seq++
+    query.value = ''
+    author.value = ''
+    selected.value = ''
+    detail.value = null
+    loading.value = false
+    error.value = ''
+    void reload()
+  },
+)
 
 async function reload() {
   historyRows.value = null
@@ -140,6 +156,10 @@ async function runCommitOp(op: 'revert' | 'cherry' | 'soft' | 'mixed') {
   const hash = menu.value?.hash
   closeMenus()
   if (!hash) return
+  if (busy.value) {
+    emit('notify', '已有 Git 操作进行中，请稍候', 'err')
+    return
+  }
   const { confirm } = await import('@tauri-apps/plugin-dialog')
   const labels = { revert: 'Revert 该提交（新建反向提交）', cherry: 'Cherry-pick 该提交到当前分支', soft: 'Reset --soft 到该提交', mixed: 'Reset --mixed 到该提交' }
   const ok = await confirm(`${labels[op]}？\n${hash}`, { title: '确认操作', kind: 'warning' })
