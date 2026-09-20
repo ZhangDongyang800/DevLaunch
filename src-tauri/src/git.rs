@@ -724,8 +724,16 @@ pub fn parse_remote_branches(text: &str) -> Vec<BranchInfo> {
     text.split('\n')
         .map(str::trim_end)
         .filter(|l| !l.is_empty())
-        .filter(|l| !l.ends_with("/HEAD"))
-        .map(|name| BranchInfo {
+        .map(|line| {
+            let mut it = line.split('\u{1f}');
+            let name = it.next().unwrap_or("").trim();
+            // refs/remotes/origin 本身是「远程 HEAD」符号引用，%(refname:short) 会把它
+            // 显示成光秃秃的 "origin"，选它只会报「分支名为空」，必须滤掉。
+            let symbolic = it.next().map(|s| !s.trim().is_empty()).unwrap_or(false);
+            (name, symbolic)
+        })
+        .filter(|(name, symbolic)| !symbolic && !name.is_empty() && !name.ends_with("/HEAD"))
+        .map(|(name, _)| BranchInfo {
             name: name.to_string(),
             current: false,
             remote: true,
@@ -747,7 +755,10 @@ pub fn branches(dir: &Path) -> Result<Vec<BranchInfo>, String> {
     )?;
     let current = run_git(dir, &["symbolic-ref", "--short", "HEAD"]).ok();
     let mut out = parse_branches(&locals, current.as_deref().map(str::trim));
-    if let Ok(remotes) = run_git(dir, &["for-each-ref", "refs/remotes", "--format=%(refname:short)"]) {
+    if let Ok(remotes) = run_git(
+        dir,
+        &["for-each-ref", "refs/remotes", "--format=%(refname:short)\u{1f}%(symref)"],
+    ) {
         out.extend(parse_remote_branches(&remotes));
     }
     Ok(out)
@@ -1559,11 +1570,20 @@ mod tests {
 
     #[test]
     fn parse_remote_branches_filters_head() {
-        let got = parse_remote_branches("origin/main\norigin/HEAD\nupstream/dev\n");
+        let got = parse_remote_branches("origin/main\u{1f}\norigin/HEAD\u{1f}refs/remotes/origin/main\nupstream/dev\u{1f}\n");
         assert_eq!(got.len(), 2);
         assert!(got.iter().all(|b| b.remote));
         assert!(got.iter().any(|b| b.name == "origin/main"));
         assert!(got.iter().all(|b| b.name != "origin/HEAD"));
+    }
+
+    #[test]
+    fn parse_remote_branches_drops_bare_remote_head_ref() {
+        // `git for-each-ref refs/remotes` 会列出 refs/remotes/origin（symref 非空），
+        // 短名显示成 "origin"，选中它只会报「分支名为空」
+        let got = parse_remote_branches("origin\u{1f}refs/remotes/origin/main\norigin/main\u{1f}\n");
+        assert_eq!(got.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), vec!["origin/main"]);
+        assert!(parse_remote_branches("").is_empty());
     }
 
     #[test]

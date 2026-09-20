@@ -24,6 +24,7 @@ const view = ref<{ enabled: boolean; settings: WorktreeSettings; defaultRoot: st
 const worktrees = ref<WorktreeInfo[]>([])
 // 每个 worktree 的脏状态，按后端返回的路径原样作键（两边同源，不做前端归一化）
 const statuses = ref<Record<string, RepoStatus>>({})
+const loadError = ref('')
 const busy = ref(false)
 let statusSeq = 0
 
@@ -50,12 +51,14 @@ async function refresh(id: string) {
     view.value = null
     worktrees.value = []
     statuses.value = {}
+    loadError.value = ''
     return
   }
   try {
     const [v, list] = await Promise.all([worktreeSettings(id), gitWorktrees(id)])
     view.value = v
     worktrees.value = list
+    loadError.value = ''
     fillDraft(v.settings)
     void refreshStatuses(id)
   } catch (e) {
@@ -63,6 +66,8 @@ async function refresh(id: string) {
     view.value = null
     worktrees.value = []
     statuses.value = {}
+    // 空态里必须留下真实原因，否则用户只能看到一句猜测
+    loadError.value = `${e}`
   }
 }
 
@@ -284,7 +289,8 @@ const isGitRepo = computed(() => !!selected.value && view.value !== null)
 
     <div v-else-if="!isGitRepo && selected" class="empty-state">
       <div class="empty-title">{{ selected.name }}</div>
-      <div class="empty-sub">读取环境信息失败，可能不是 git 仓库或未找到 git.exe</div>
+      <div class="empty-sub">{{ loadError || '读取环境信息失败，可能不是 git 仓库或未找到 git.exe' }}</div>
+      <button class="ghost" @click="refresh(selectedId)">重试</button>
     </div>
 
     <template v-else-if="selected && view">
