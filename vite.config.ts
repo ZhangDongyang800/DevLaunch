@@ -1,8 +1,12 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
-// @ts-expect-error type error without @types/node package
-import process from "node:process";
-const host = process.env.TAURI_DEV_HOST;
+
+// `TAURI_DEV_HOST` 由 `tauri dev --host <ip>` 注入到 Vite 进程的环境变量里。
+// 不引 `@types/node`：全仓只有这一处需要 process，用一个窄断言即可——为它引入
+// 整包 Node 类型会让 `process` 看起来到处可用（而这个前端并不跑在 Node 里）。
+const host = (
+  globalThis as { process?: { env?: Record<string, string | undefined> } }
+).process?.env?.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(() => ({

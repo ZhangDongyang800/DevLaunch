@@ -1,0 +1,57 @@
+name: CI
+
+# 只跑项目自己的两道验收门槛（AGENTS.md「Commands」一节）：
+#   npm run build  = vue-tsc 类型检查 + vite build（前端唯一门槛）
+#   cargo test     = 后端单测
+# 加 clippy 是为了挡住"能编译但明显有问题"的写法；当前告警已清零，所以直接 -D warnings。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    # 必须在 Windows 上跑：platform/ 只有 windows 实现，Linux runner 上
+    # `resolve_git_path()` 找不到 git.exe，git 相关测试会**静默跳过**——绿了等于没测。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # 用 first-party 的 actions/cache，不引第三方 action：Tauri 全量编译很慢，
+      # 缓存 target/ 与 cargo registry 能把单次 CI 从 ~10 分钟压到 ~2 分钟。
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # windows-latest 自带 rustup + stable。不在这里 pin 具体版本：
+      # Cargo.toml 的 `rust-version` 已声明 MSRV，而 CI 用 runner 的 stable
+      # 才能提前发现"新 stable 引入新告警"这类问题。
+      - run: rustc --version && cargo --version
+
+      - run: npm ci
+
+      - name: Frontend unit tests (vitest)
+        run: npm test
+
+      - name: Frontend type check + build
+        run: npm run build
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Clippy (deny warnings)
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings

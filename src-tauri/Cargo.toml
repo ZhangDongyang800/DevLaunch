@@ -1,9 +1,11 @@
 [package]
 name = "devlaunch"
-version = "0.0.4"
+version = "0.0.5"
 description = "One-click launcher for Windows dev project startup"
 authors = ["ZhangDongyang800"]
 edition = "2021"
+# Tauri 2 的基线 MSRV。显式声明，避免换机器/CI 上因工具链漂移出现"只在某人机器上编译不过"。
+rust-version = "1.77"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -12,6 +14,9 @@ edition = "2021"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "devlaunch_lib"
+# staticlib/cdylib 是 Tauri 模板为移动端保留的；本产品仅 Windows 桌面，
+# 但删掉它们会影响 tauri build 的打包链路，需要一次完整 release 构建才能验证，
+# 因此暂不改（收益只是构建时间）。
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -39,4 +44,8 @@ codegen-units = 1
 lto = true
 opt-level = 3
 panic = "abort"
-strip = true
+# `strip = true` 等于 `"symbols"`：连符号表一起剥掉，crash 时连函数名都没有。
+# `"debuginfo"` 只剥调试信息、保留符号表——体积几乎一样，但崩溃转储/事后
+# 分析还能看出是哪个函数炸的。配合 `panic = "abort"`（进程直接消失、无栈），
+# 这一点点可诊断性很值钱。
+strip = "debuginfo"
