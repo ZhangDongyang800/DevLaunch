@@ -4,8 +4,15 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_notification::NotificationExt;
 
+/// 发系统通知。
+///
+/// 失败**不能静默**：未注册 AUMID 时（便携 exe、非安装目录运行、`tauri dev`）
+/// 系统会把通知直接丢掉。那种情况下用户什么也看不到——把失败写进日志，
+/// 至少留下一条可诊断的痕迹。
 pub fn notify(app: &AppHandle, body: String) {
-    let _ = app.notification().builder().title("DevLaunch").body(&body).show();
+    if let Err(e) = app.notification().builder().title("DevLaunch").body(&body).show() {
+        crate::diag::warn(format!("系统通知发送失败（{e}）：{body}"));
+    }
 }
 
 fn main_window_visible(app: &AppHandle) -> bool {
@@ -40,7 +47,7 @@ pub fn launch_item(app: &AppHandle, cfg: &AppConfig, project_id: &str, item_id: 
 }
 
 pub fn launch_items(app: &AppHandle, project: &Project, items: &[Item]) -> Result<(), String> {
-    let panes = build_panes(project, items).map_err(|e| { notify(app, e.clone()); e })?;
+    let panes = build_panes(project, items).inspect_err(|e| notify(app, e.clone()))?;
     let mode = platform::spawn_panes(&project.name, &panes)
         .map_err(|e| { let m = format!("启动失败：{e}"); notify(app, m.clone()); m })?;
     report_launch(app, &project.name, panes.len(), mode);
@@ -65,7 +72,7 @@ pub fn launch_worktree(
     let dir = crate::worktree::resolve_worktree_path(&list, branch)?;
     let env = crate::worktree::pane_env(&settings, branch, &dir.to_string_lossy())?;
     let panes = build_panes_in(&project.items, &dir, &env)
-        .map_err(|e| { notify(app, e.clone()); e })?;
+        .inspect_err(|e| notify(app, e.clone()))?;
     let label = format!("{} · {}", project.name, branch.trim());
     let mode = platform::spawn_panes(&label, &panes)
         .map_err(|e| { let m = format!("启动失败：{e}"); notify(app, m.clone()); m })?;
@@ -113,9 +120,15 @@ pub fn build_panes_in(
     let root_dir = base_dir.to_string_lossy().to_string();
     let mut panes = Vec::with_capacity(items.len());
     for item in items {
+        let label = if item.name.trim().is_empty() { "未命名启动项" } else { item.name.as_str() };
+        // 空命令会开出一个「什么都不做」的终端窗口：看起来启动成功了，其实没有。
+        // 在计划阶段就拒绝并指名道姓，比让用户对着空白窗格猜要好。
+        if item.command.trim().is_empty() {
+            return Err(format!("「{label}」还没有填写命令，请先在编辑器里补上"));
+        }
         let wd = resolve_work_dir(&root_dir, &item.work_dir);
         if !wd.is_dir() {
-            return Err(format!("「{}」目录不存在：{}", item.name, wd.display()));
+            return Err(format!("「{label}」目录不存在：{}", wd.display()));
         }
         panes.push(PaneSpec {
             title: item.name.clone(),
@@ -158,6 +171,26 @@ mod tests {
         let (_dir, mut p) = project();
         p.items[0].work_dir = Some("nope-xyz".into());
         assert!(build_panes(&p, &p.items).unwrap_err().contains("目录不存在"));
+    }
+
+    /// 空命令会开出一个什么都不做的窗口，看起来像"启动成功了但没反应"。
+    #[test]
+    fn build_panes_errors_on_empty_command() {
+        let (_dir, mut p) = project();
+        p.items[0].command = "   \n\t ".into();
+        let err = build_panes(&p, &p.items).unwrap_err();
+        assert!(err.contains("还没有填写命令"), "{err}");
+        // 报错要指名道姓，否则用户不知道是哪个启动项
+        assert!(err.contains("后端"), "{err}");
+    }
+
+    #[test]
+    fn build_panes_labels_unnamed_item_in_error() {
+        let (_dir, mut p) = project();
+        p.items[0].name = "  ".into();
+        p.items[0].command = String::new();
+        let err = build_panes(&p, &p.items).unwrap_err();
+        assert!(err.contains("未命名启动项"), "{err}");
     }
 
     #[test]

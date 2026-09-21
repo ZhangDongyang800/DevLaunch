@@ -177,10 +177,43 @@ enum ReadOutcome {
     Text(String),
 }
 
+/// 配置 / 模板文件的读取上限。
+///
+/// 真实文件都在百 KB 量级，8MB 已非常宽松。没有这道预检时 `fs::read_to_string`
+/// 会按文件大小一次性分配内存：用户误选一个大文件（日志、镜像、数据库）就是
+/// 分配失败 → panic，而 release 是 `panic = "abort"`，**进程直接消失**，
+/// 连前端那个"配置加载失败 + 重试"的空态都到不了。
+pub const MAX_JSON_BYTES: u64 = 8 * 1024 * 1024;
+
+/// 带大小上限的文本读取（配置、模板、导入文件统一走这里）。
+pub fn read_text_limited(path: &Path) -> Result<String, String> {
+    let meta = fs::metadata(path).map_err(|e| format!("读取失败：{e}"))?;
+    if !meta.is_file() {
+        return Err(format!("不是文件：{}", path.display()));
+    }
+    if meta.len() > MAX_JSON_BYTES {
+        return Err(format!(
+            "文件过大（约 {} MB，上限 {} MB），请确认选的是 DevLaunch 的配置文件或项目模板",
+            meta.len() / (1024 * 1024),
+            MAX_JSON_BYTES / (1024 * 1024)
+        ));
+    }
+    fs::read_to_string(path).map_err(|e| format!("读取失败：{e}"))
+}
+
 /// 一次性的瞬时失败重试：Windows 上杀软/索引器短暂占用很常见。
 fn read_config_file(path: &Path) -> ReadOutcome {
     let mut last = String::new();
     for attempt in 0..3 {
+        // 过大文件不能当"读不出来"以外的任何东西，更不能直接读进内存。
+        if let Ok(meta) = fs::metadata(path) {
+            if meta.is_file() && meta.len() > MAX_JSON_BYTES {
+                return ReadOutcome::Failed(format!(
+                    "配置文件过大（约 {} MB）",
+                    meta.len() / (1024 * 1024)
+                ));
+            }
+        }
         match fs::read_to_string(path) {
             Ok(text) => return ReadOutcome::Text(text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -236,6 +269,7 @@ impl AppConfig {
     }
 
     pub fn load_diagnostic(path: &Path) -> LoadedConfig {
+        sweep_stale_temps(path);
         let fallback = LoadedConfig {
             config: AppConfig::new(),
             corrupt_backup: None,
@@ -245,13 +279,13 @@ impl AppConfig {
         match read_config_file(path) {
             ReadOutcome::Absent => fallback,
             ReadOutcome::Failed(e) => {
-                eprintln!("config read failed: {e}; refusing to write over it");
+                crate::diag::error(format!("配置读取失败：{e}；拒绝在其上写入"));
                 LoadedConfig { blocked: Some(e), ..fallback }
             }
             ReadOutcome::Text(text) => match parse_config(&text) {
                 Ok(config) => LoadedConfig { config, ..fallback },
                 Err(e) => {
-                    eprintln!("config parse failed: {e}; backing up and recovering");
+                    crate::diag::error(format!("配置解析失败：{e}；备份并尝试恢复"));
                     let corrupt_backup = backup_corrupt(path).ok();
                     match newest_readable_backup(path) {
                         Some((config, from)) => LoadedConfig {
@@ -303,14 +337,48 @@ pub fn normalize_ids(cfg: &mut AppConfig) {
     }
 }
 
+/// 原子替换用的临时文件名。
+///
+/// 必须是**每次不同**的名字：固定成 `<stem>.json.tmp` 时，两个保存路径（或一次
+/// 崩溃残留 + 一次新保存）会互相踩；残留文件也永远不会被清理。进程号 + 纳秒
+/// 足以区分，且以 `.` 开头、以 `.tmp` 结尾——两重特征都让"从备份恢复"的扫描
+/// 跳过它（半截的写入绝不能被当成可恢复的备份）。
+fn temp_sibling(path: &Path) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let stem = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!(".{stem}.{}.{nanos}.tmp", std::process::id()))
+}
+
+/// 启动时清掉上次崩溃/强杀留下的临时文件。单实例插件保证不会有别的进程正在写。
+fn sweep_stale_temps(path: &Path) {
+    let Some(dir) = path.parent() else { return };
+    let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { return };
+    let prefix = format!(".{name}.");
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let f = entry.file_name().to_string_lossy().into_owned();
+        if f.starts_with(&prefix) && f.ends_with(".tmp") {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
 pub fn save_json<T: Serialize>(value: &T, path: &Path) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let tmp = temp_sibling(path);
     let text = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
     fs::write(&tmp, text).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
+    // rename 失败时别把临时文件留在目录里。
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    Ok(())
 }
 
 fn backup_corrupt(path: &Path) -> std::io::Result<PathBuf> {
@@ -566,7 +634,7 @@ impl ProjectTemplate {
     }
 
     pub fn load(path: &Path) -> Result<ProjectTemplate, String> {
-        let text = fs::read_to_string(path).map_err(|e| format!("读取失败：{e}"))?;
+        let text = read_text_limited(path)?;
         parse_template(&text).map_err(|e| format!("配置文件格式错误：{e}"))
     }
 }

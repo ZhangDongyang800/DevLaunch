@@ -56,16 +56,16 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
 pub fn rebuild(app: &AppHandle) {
     let Some(tray) = app.tray_by_id("main-tray") else {
-        eprintln!("tray rebuild skipped: tray icon not found");
+        crate::diag::warn("托盘菜单重建被跳过：找不到托盘图标");
         return;
     };
     match build_menu(app) {
         Ok(menu) => {
             if let Err(e) = tray.set_menu(Some(menu)) {
-                eprintln!("tray set_menu failed: {e}");
+                crate::diag::warn(format!("托盘 set_menu 失败：{e}"));
             }
         }
-        Err(e) => eprintln!("tray menu rebuild failed: {e}"),
+        Err(e) => crate::diag::warn(format!("托盘菜单重建失败：{e}")),
     }
 }
 
@@ -89,7 +89,7 @@ fn handle_menu(app: &AppHandle, id: String) {
         std::thread::spawn(move || {
             let Ok(cfg) = app.state::<AppState>().config.lock().map(|g| g.clone()) else { return };
             if let Err(e) = launcher::launch_project(&app, &cfg, &project_id) {
-                eprintln!("launch failed: {e}");
+                crate::diag::error(format!("托盘启动项目 {project_id} 失败：{e}"));
                 show_main_window(&app);
                 let _ = app.emit("launch-error", e);
             } else {

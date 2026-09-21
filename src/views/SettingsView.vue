@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { applyTheme, config, persist, THEMES } from '../store'
-import { exportConfigTo, getAutostart, getConfig, getGitInfo, importConfigFrom, setAutostart, setHotkey } from '../api'
+import { exportConfigTo, getAutostart, getConfig, getGitInfo, importConfigFrom, openLogDir, setAutostart, setHotkey } from '../api'
 import type { GitInfo } from '../types'
 
 const emit = defineEmits<{ notify: [msg: string, kind?: 'ok' | 'err'] }>()
@@ -36,12 +36,17 @@ async function onThemeChange(e: Event) {
   }
 }
 
-onMounted(async () => {
+/** 自启的唯一事实来源是系统注册表——每次都要重新读，别缓存。 */
+async function refreshAutostart() {
   try {
     autostart.value = await getAutostart()
   } catch {
     autostart.value = false
   }
+}
+
+onMounted(async () => {
+  await refreshAutostart()
   await loadGitInfo()
 })
 
@@ -57,12 +62,19 @@ async function loadGitInfo() {
 async function saveGitPath(path: string) {
   if (!config.value) return
   const trimmed = path.trim()
-  config.value.settings.gitPath = trimmed ? trimmed : null
+  const previous = config.value.settings.gitPath ?? null
+  const next = trimmed ? trimmed : null
+  if (next === previous) return
+  config.value.settings.gitPath = next
   try {
     await persist()
     await loadGitInfo()
     emit('notify', gitInfo.value.resolved ? '已找到 git.exe' : '未找到 git.exe，请确认路径或留空自动检测')
   } catch (e) {
+    // 与主题切换保持一致：保存失败必须把内存与控件都还原。否则界面显示的是一个
+    // 从未落盘的值，而且下一次任意页面的 persist() 会顺手把它写进去。
+    config.value.settings.gitPath = previous
+    gitPath.value = previous ?? ''
     emit('notify', `保存失败：${e}`, 'err')
   }
 }
@@ -125,9 +137,23 @@ async function doImport() {
   try {
     await importConfigFrom(picked)
     config.value = await getConfig()
+    // 导入会整份替换 settings（含 autostart 与主题）。开关必须重新读一次真实状态，
+    // 否则它还停在上一次 onMounted 读到的值——界面上是一个说谎的开关。
+    await refreshAutostart()
+    applyTheme(config.value?.settings.theme)
     emit('notify', '配置已导入')
   } catch (e) {
     emit('notify', `导入失败：${e}`, 'err')
+  }
+}
+
+/** 打开日志目录：release 没有控制台，日志是唯一的失败现场。 */
+async function openLogs() {
+  try {
+    const dir = await openLogDir()
+    emit('notify', `已打开日志目录：${dir}`)
+  } catch (e) {
+    emit('notify', `打开日志目录失败：${e}`, 'err')
   }
 }
 
@@ -158,6 +184,8 @@ function comboFromEvent(e: KeyboardEvent): string | null {
 }
 
 function onRecordKeydown(e: KeyboardEvent) {
+  // Tab / Shift+Tab 放行：录制期间也要能跳出，否则键盘用户被锁在录制态里。
+  if (e.key === 'Tab') return
   e.preventDefault()
   e.stopPropagation()
   if (e.repeat) return
@@ -269,8 +297,19 @@ onUnmounted(() => window.removeEventListener('keydown', onRecordKeydown, true))
         <button class="ghost" @click="doExport">导出</button>
         <button class="ghost" @click="doImport">导入</button>
       </div>
+
+      <div class="list-row">
+        <div class="set-info">
+          <div class="set-title">日志</div>
+          <div class="set-sub">
+            出错时这里留有现场。反馈问题时请把日志里的内容一起附上（单文件上限 2MB，自动滚动）
+          </div>
+        </div>
+        <button class="ghost" @click="openLogs">打开日志目录</button>
+      </div>
     </div>
 
     <p class="hint mono">%APPDATA%\com.devlaunch.app\config.json</p>
+    <p class="hint mono">%APPDATA%\com.devlaunch.app\logs\devlaunch.log</p>
   </div>
 </template>

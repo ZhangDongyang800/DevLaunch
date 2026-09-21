@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod config;
 pub mod detect;
+pub mod diag;
 pub mod git;
 pub mod git_write;
 pub mod hotkey;
@@ -50,8 +51,16 @@ pub fn run() {
         ))
         .setup(|app| {
             let dir = app.path().app_data_dir().expect("failed to resolve app data dir");
+            // 日志必须先初始化：release 没有控制台，后面任何失败都只能靠这个文件留现场。
+            diag::init(&dir.join("logs"));
             let path = dir.join("config.json");
             let loaded = AppConfig::load_diagnostic(&path);
+            diag::info(format!(
+                "启动 v{} 配置={} 项目数={}",
+                env!("CARGO_PKG_VERSION"),
+                path.display(),
+                loaded.config.projects.len()
+            ));
             let mut cfg = loaded.config;
             if let Ok(enabled) = app.autolaunch().is_enabled() {
                 cfg.settings.autostart = enabled;
@@ -157,6 +166,7 @@ pub fn run() {
             commands::git_commit_detail,
             commands::git_branches,
             commands::git_file_diff,
+            commands::git_binary_preview,
             commands::git_stage,
             commands::git_unstage,
             commands::git_discard,
@@ -184,6 +194,7 @@ pub fn run() {
             commands::launch_worktree_cmd,
             commands::open_file,
             commands::get_git_info,
+            commands::open_log_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

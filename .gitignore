@@ -19,6 +19,9 @@ docs/
 # Local agent instructions
 AGENTS.md
 
+# Local agent workspace (memory, logs) — not published
+.workbuddy-ai/
+
 # Editor directories and files
 .vscode/
 .idea

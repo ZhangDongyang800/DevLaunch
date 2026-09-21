@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   AppConfig,
+  BinaryPreview,
   BranchInfo,
   CommitDetail,
   DetectResult,
@@ -55,6 +56,12 @@ export const gitFileDiff = (
   ignoreWhitespace: boolean,
   fullContext: boolean,
 ) => invoke<FileDiff>('git_file_diff', { projectId, path, staged, ignoreWhitespace, fullContext })
+export const gitBinaryPreview = (
+  projectId: string,
+  path: string,
+  staged: boolean,
+  hash?: string,
+) => invoke<BinaryPreview>('git_binary_preview', { projectId, path, staged, hash })
 export const gitStage = (projectId: string, paths: string[]) => invoke<void>('git_stage', { projectId, paths })
 export const gitUnstage = (projectId: string, paths: string[]) => invoke<void>('git_unstage', { projectId, paths })
 export const gitDiscard = (projectId: string, paths: string[]) => invoke<void>('git_discard', { projectId, paths })
@@ -80,6 +87,8 @@ export const gitPull = (projectId: string) => invoke<void>('git_pull', { project
 export const gitPush = (projectId: string) => invoke<PushResult>('git_push', { projectId })
 export const gitLastFetch = (projectId: string) => invoke<number | null>('git_last_fetch', { projectId })
 export const getGitInfo = () => invoke<GitInfo>('get_git_info')
+/** 打开日志目录并返回路径。release 没有控制台，日志是唯一的失败现场。 */
+export const openLogDir = () => invoke<string>('open_log_dir')
 
 export const worktreeSettings = (projectId: string) =>
   invoke<WorktreeView>('worktree_settings', { projectId })
