@@ -331,7 +331,7 @@ fn seg_match(pattern: &str, text: &str) -> bool {
             }
             Some('?') => !t.is_empty() && helper(&p[1..], &t[1..]),
             Some(c) => {
-                !t.is_empty() && c.to_ascii_lowercase() == t[0].to_ascii_lowercase() && helper(&p[1..], &t[1..])
+                !t.is_empty() && c.eq_ignore_ascii_case(&t[0]) && helper(&p[1..], &t[1..])
             }
         }
     }

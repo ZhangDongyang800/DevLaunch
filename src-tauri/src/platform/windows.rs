@@ -36,22 +36,53 @@ pub enum SpawnPlan {
     Fallback { launches: Vec<FallbackLaunch> },
 }
 
-/// 回显文本转义：cmd 元字符加 ^，避免 echo 参数被解析为连接/重定向。
+/// 回显文本转义。
+///
+/// `^ & | < >` 加 `^`：避免 echo 的参数被当成连接符/重定向。
+///
+/// `"` **替换为 `'`**（与 `quote_wt_arg` 同一约定）：整条 pane 命令最终是
+/// `cmd /K "<pane 命令>"` 的一段，而 wt 会用 `CommandLineToArgvW` 再解析一次
+/// 整条命令行。回显文本里每多一个 `"`，就多一个可能改变引号配对的自由度；
+/// 提示符是给人看的显示串，让它**不含引号**就整类风险归零。
+/// （用户命令原文本身仍原样保留——那是要执行的内容，不能改。）
+///
+/// `%` 故意不动：cmd 在交互式命令行上**没有** `%` 的转义写法（`%%` 只在批处理
+/// 里等于字面 `%`），改 `%%` 只会把"回显展开后的值"变成"回显多两个百分号"。
+/// 这一条是已记录的观感限制（PRODUCT.md §12.3），不是可修的缺陷。
 fn escape_echo_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 8);
     for ch in text.chars() {
-        if matches!(ch, '^' | '&' | '|' | '<' | '>') {
-            out.push('^');
+        match ch {
+            '^' | '&' | '|' | '<' | '>' => {
+                out.push('^');
+                out.push(ch);
+            }
+            '"' => out.push('\''),
+            _ => out.push(ch),
         }
-        out.push(ch);
     }
     out
+}
+
+/// `cd /d` 的目录引号形态。
+///
+/// 结尾反斜杠必须加倍：盘根（`D:\`）作为 workDir 时，`cd /d "D:\"` 里的 `\"`
+/// 会被 `CommandLineToArgvW` 读成「字面引号」而不是「引号结束」，整条 pane 命令
+/// 从这里开始错位。规则与 `quote_wt_arg` 一致（`-d`/`--title` 早已这么做，
+/// 这里补上遗漏的第三处）。
+fn quote_cmd_dir(dir: &str) -> String {
+    let mut out = dir.replace('"', "'");
+    let trailing = out.chars().rev().take_while(|c| *c == '\\').count();
+    if trailing > 0 {
+        out.push_str(&"\\".repeat(trailing));
+    }
+    format!("\"{out}\"")
 }
 
 /// 先注入环境变量，再 cd 到工作目录，然后逐行回显「目录>命令」后执行。
 pub fn cmd_pane_command(work_dir: &Path, command: &str, env: &[(String, String)]) -> String {
     let dir = work_dir.display().to_string();
-    let cd = format!("cd /d \"{dir}\"");
+    let cd = format!("cd /d {}", quote_cmd_dir(&dir));
     let lines: Vec<&str> = command.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     let mut parts: Vec<String> = env
         .iter()
@@ -423,10 +454,26 @@ mod tests {
 
     #[test]
     fn cmd_pane_prompt_for_drive_root() {
+        // 盘根的结尾反斜杠必须加倍，否则 `\"` 会被 wt 的 CommandLineToArgvW
+        // 当成字面引号，整条 pane 命令从这里开始错位。
         assert_eq!(
             cmd_pane_command(Path::new(r"D:\"), "dir", &[]),
-            r#"cd /d "D:\" && echo D:\^>dir && dir"#
+            r#"cd /d "D:\\" && echo D:\^>dir && dir"#
         );
+    }
+
+    #[test]
+    fn cmd_pane_prompt_never_contains_double_quote() {
+        // 提示符是显示串：里面出现 `"` 会改变 `cmd /K "…"` 的引号配对自由度。
+        let got = cmd_pane_command(Path::new(r"D:\p"), r#"echo "a b" && echo 'c'"#, &[]);
+        let prompt = got.split(" && ").nth(1).expect("prompt segment");
+        assert!(!prompt.contains('"'), "{got}");
+        // 元字符照旧加 ^ 转义，双引号换成了单引号
+        assert_eq!(prompt, r#"echo D:\p^>echo 'a b' ^&^& echo 'c'"#, "{got}");
+        // 真正要执行的那一份原文必须一字不改
+        assert!(got.ends_with(r#"echo "a b" && echo 'c'"#), "{got}");
+        // 整条命令的引号数保持偶数，wt 解析时才不会提前闭合
+        assert_eq!(got.matches('"').count() % 2, 0, "{got}");
     }
 
     #[test]

@@ -299,9 +299,33 @@ pub fn get_config(state: State<AppState>) -> AppConfig {
     state.config.lock().unwrap().clone()
 }
 
+/// `leases` 是**后端权威**字段，前端只负责编辑政策（root / copy / portBase / portKey）。
+///
+/// 租约由 Rust 在新建/删除环境时写入。前端 `persist()` 发来的是它加载配置那一刻
+/// 的快照——直接采用就会把期间新写入的租约覆盖掉。后果不是"少一个数字"，而是：
+/// 该环境此后不再注入 `PORT`，而它占用的端口在 `allocate_port` 眼里又变成空闲，
+/// 可以再分给另一个分支 → 两个环境同端口，静默冲突。
+/// 所以这里一律以内存中的租约为准（缺失则该项目的租约保持空）。
+fn preserve_leases(incoming: &mut AppConfig, current: &AppConfig) {
+    for project in &mut incoming.projects {
+        let Some(settings) = project.worktree.as_mut() else { continue };
+        settings.leases = current
+            .projects
+            .iter()
+            .find(|p| p.id == project.id)
+            .and_then(|p| p.worktree.as_ref())
+            .map(|w| w.leases.clone())
+            .unwrap_or_default();
+    }
+}
+
 #[tauri::command]
-pub fn save_config(app: AppHandle, state: State<AppState>, config: AppConfig) -> Result<(), String> {
+pub fn save_config(app: AppHandle, state: State<AppState>, mut config: AppConfig) -> Result<(), String> {
     let git_path = config.settings.git_path.clone();
+    {
+        let current = state.config.lock().map_err(|_| "配置状态不可用".to_string())?;
+        preserve_leases(&mut config, &current);
+    }
     apply_config(&state, config)?;
     git::set_configured_git(git_path.as_deref());
     tray::rebuild(&app);
@@ -361,7 +385,7 @@ pub(crate) fn record_launch(app: &AppHandle, project_id: &str) {
     let mut guard = state.config.lock().unwrap();
     if touch_last_launched(&mut guard, project_id, now_secs()) {
         if let Err(e) = guard.save(&state.path) {
-            eprintln!("record launch failed: {e}");
+            crate::diag::warn(format!("记录最近启动时间失败（不影响启动）：{e}"));
         }
     }
 }
@@ -455,7 +479,8 @@ pub fn launch_item_cmd(app: AppHandle, state: State<AppState>, project_id: Strin
     result
 }
 
-#[tauri::command]
+/// 打开目录。`explorer` 的启动与进程创建放在工作线程上，别占主线程。
+#[tauri::command(async)]
 pub fn open_dir(path: String) -> Result<(), String> {
     if !Path::new(&path).is_dir() {
         return Err(format!("目录不存在：{path}"));
@@ -509,10 +534,12 @@ pub fn export_config_to(state: State<AppState>, path: String) -> Result<(), Stri
 
 #[tauri::command]
 pub fn import_config_from(app: AppHandle, state: State<AppState>, path: String) -> Result<(), String> {
-    let text = fs::read_to_string(&path).map_err(|e| format!("读取失败：{e}"))?;
+    // 带大小上限地读：误选一个大文件不能让进程因分配失败而 abort。
+    let text = crate::config::read_text_limited(Path::new(&path))?;
     let cfg = crate::config::parse_config(&text).map_err(|e| format!("配置文件格式错误：{e}"))?;
     let old_hotkey = state.config.lock().unwrap().settings.hotkey.clone();
     let new_hotkey = cfg.settings.hotkey.clone();
+    let want_autostart = cfg.settings.autostart;
     if new_hotkey != old_hotkey {
         if let Err(e) = crate::hotkey::register(&app, &new_hotkey) {
             let _ = crate::hotkey::register(&app, &old_hotkey);
@@ -538,6 +565,15 @@ pub fn import_config_from(app: AppHandle, state: State<AppState>, path: String) 
         *g = Some(new_hotkey);
     }
     tray::rebuild(&app);
+    // 开机自启的唯一事实来源是系统注册表：只把值写进配置而不动注册表的话，
+    // 设置页会显示一个**说谎的开关**（显示"开"、实际不自启），直到下次启动被
+    // lib.rs 的注册表回填纠正。这里按导入值同步注册表；失败只记日志——
+    // 注册表权限问题不该让整份配置导入失败。
+    let auto = app.autolaunch();
+    let synced = if want_autostart { auto.enable() } else { auto.disable() };
+    if let Err(e) = synced {
+        crate::diag::warn(format!("导入后同步开机自启失败（期望 {want_autostart}）：{e}"));
+    }
     Ok(())
 }
 
@@ -652,7 +688,25 @@ fn statuses_parallel(targets: Vec<(String, Result<PathBuf, String>)>) -> Vec<git
             });
         }
     });
-    results.into_inner().unwrap().into_iter().flatten().collect()
+    // 用 `map` 而不是 `flatten()`：`flatten` 会把没被填上的槽位直接丢掉，
+    // 而调用方（`worktree_statuses` 用 `zip` 对齐目录与状态）依赖"长度与下标
+    // 一一对应"——少一个槽位就会把脏状态静默挂到错误的环境行上。
+    // 空槽位填一个显式的错误值，保证长度恒等于 targets.len()。
+    results
+        .into_inner()
+        .map(|slots| {
+            slots
+                .into_iter()
+                .enumerate()
+                .map(|(i, slot)| {
+                    slot.unwrap_or_else(|| {
+                        let id = targets.get(i).map(|(id, _)| id.clone()).unwrap_or_default();
+                        git::RepoStatus::errored(&id, "内部错误：该仓库的状态没有产出".into())
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[tauri::command(async)]
@@ -728,6 +782,9 @@ pub fn git_file_history(
     if path.trim().is_empty() {
         return Err("文件路径为空".into());
     }
+    // 与 `git_file_diff` / `open_file` 同一道防线：路径必须落在仓库内。
+    // 这里过去靠 git 自己的 pathspec 拒绝 `..`，属于把不变量外包给外部程序。
+    repo_relative(&path)?;
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
     let commits = git::git_log_filtered(&dir, limit.unwrap_or(100), 0, None, None, Some(&path))?;
@@ -768,6 +825,24 @@ pub fn git_file_diff(
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
     git::file_diff(&dir, &path, staged, ignore_whitespace, full_context)
+}
+
+/// 二进制文件的两侧内容（图片预览）。只读、按需调用：文本 diff 报 binary 之后前端才来取。
+#[tauri::command(async)]
+pub fn git_binary_preview(
+    state: State<'_, AppState>,
+    project_id: String,
+    path: String,
+    staged: bool,
+    hash: Option<String>,
+) -> Result<git::BinaryPreview, String> {
+    if path.trim().is_empty() {
+        return Err("文件路径为空".into());
+    }
+    repo_relative(&path)?;
+    let cfg = state.config.lock().unwrap().clone();
+    let dir = project_dir(&cfg, &project_id)?;
+    git::binary_preview(&dir, &path, staged, hash.as_deref(), git::MAX_PREVIEW_BYTES)
 }
 
 /// 前端传来的仓库内相对路径：拒绝绝对路径与 `..`，否则 `dir.join(path)` 会跳出仓库。
@@ -1045,10 +1120,10 @@ pub fn git_worktree_prune(state: State<'_, AppState>, project_id: String) -> Res
     crate::worktree::prune(&dir)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn launch_worktree_cmd(
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
     project_id: String,
     branch: String,
 ) -> Result<(), String> {
@@ -1060,8 +1135,8 @@ pub fn launch_worktree_cmd(
     result
 }
 
-#[tauri::command]
-pub fn open_file(state: State<AppState>, project_id: String, path: String) -> Result<(), String> {
+#[tauri::command(async)]
+pub fn open_file(state: State<'_, AppState>, project_id: String, path: String) -> Result<(), String> {
     repo_relative(&path)?;
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
@@ -1096,9 +1171,28 @@ pub fn get_git_info() -> GitInfo {
     }
 }
 
+/// 打开日志目录并返回它的路径。
+///
+/// release 是 `windows_subsystem = "windows"`：没有控制台，日志文件是**唯一**
+/// 的失败现场。给用户一个入口，才可能把现场带回来。
+#[tauri::command(async)]
+pub fn open_log_dir() -> Result<String, String> {
+    let dir = crate::diag::log_dir().ok_or_else(|| "日志目录尚未初始化".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer").arg(&dir).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(windows))]
+    {
+        return Err("open_log_dir 仅支持 Windows".into());
+    }
+    Ok(dir.to_string_lossy().to_string())
+}
+
 /// Windows 路径比较归一化：统一分隔符、去尾分隔符、不区分大小写。
 pub fn normalize_for_compare(path: &str) -> String {
-    path.trim_end_matches(|c| c == '\\' || c == '/')
+    path.trim_end_matches(['\\', '/'])
         .replace('/', "\\")
         .to_ascii_lowercase()
 }

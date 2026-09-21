@@ -19,7 +19,11 @@ pub struct PaneSpec {
     pub env: Vec<(String, String)>,
 }
 
+// 非 Windows 目标：本产品只在 Windows 上运行，但 stub 也要能编译通过，
+// 否则 `cargo test` / `cargo check` 在别的平台上连纯函数测试都跑不了。
+// `PartialEq` 是必须的——`launcher.rs` 用 `mode == LaunchMode::Fallback` 比较。
 #[cfg(not(windows))]
+#[derive(Debug, PartialEq, Eq)]
 pub enum LaunchMode {
     WindowsTerminal,
     Fallback,
