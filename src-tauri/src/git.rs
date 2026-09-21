@@ -12,7 +12,14 @@ use std::time::{Duration, Instant};
 use std::os::windows::process::CommandExt;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-const GIT_TIMEOUT: Duration = Duration::from_secs(5);
+/// 只读调用的超时。
+///
+/// 5s 太紧：Windows 上杀软/索引器在场时，一个十万文件量级的仓库跑一次
+/// `git status` 冷缓存就要好几秒，超时会被 `kill_tree` 强杀并让首页徽章
+/// 变成灰色的 `—`——用户看到的是"随机出现的错误"，而不是"这个仓库很大"。
+/// 读操作本来就不改仓库状态，放宽到 15s 的代价只是慢，收益是不再误报。
+/// 写/网络路径各自在自己的模块里传 `GitRunOpts.timeout`，不受这里影响。
+const READ_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_OUTPUT_BYTES: u64 = 4 * 1024 * 1024;
 
 /// `DEVLAUNCH_GIT_PATH` → PATH 中的 git.exe → `%ProgramFiles%\Git\cmd\git.exe`
@@ -231,7 +238,7 @@ pub struct GitRunOpts {
 
 impl Default for GitRunOpts {
     fn default() -> Self {
-        Self { allow_prompt: false, timeout: GIT_TIMEOUT, stdin_data: None }
+        Self { allow_prompt: false, timeout: READ_TIMEOUT, stdin_data: None }
     }
 }
 
@@ -249,6 +256,23 @@ struct GitRaw {
 pub(crate) fn run_git_with(program: &Path, dir: &Path, args: &[&str]) -> Result<String, String> {
     let raw = spawn_git(program, dir, args, GitRunOpts::default())?;
     raw.into_result(None)
+}
+
+/// 只读调用的产物：文本 + 是否因为撞上输出上限而被截断。
+///
+/// 截断必须能被调用方看见：`capped_result` 在超限时返回的是 `Ok`（内容不完整但
+/// 语法上仍能解析），`parse_status` / `parse_log` 会把残缺的尾部当完整数据用，
+/// 结果是脏文件数、ahead/behind、提交列表**静默偏少**。有了这个标记，调用方
+/// 才能如实告诉用户"结果不完整"。
+pub(crate) struct GitText {
+    pub text: String,
+    pub capped: bool,
+}
+
+pub(crate) fn run_git_capped(program: &Path, dir: &Path, args: &[&str]) -> Result<GitText, String> {
+    let raw = spawn_git(program, dir, args, GitRunOpts::default())?;
+    let capped = raw.capped;
+    raw.into_result(None).map(|text| GitText { text, capped })
 }
 
 pub(crate) fn run_git_with_opts(
@@ -485,6 +509,9 @@ pub struct RepoStatus {
     pub untracked: u32,
     pub conflicts: u32,
     pub operation: Option<String>,
+    /// `git status` 的输出撞上 4MB 上限被截断 → 上面的计数与 `files` 都不完整。
+    /// 必须让前端能显示出来，否则"少列了几个文件"会被当成"就这些"。
+    pub truncated: bool,
     pub files: Vec<FileChange>,
     pub error: Option<String>,
 }
@@ -503,6 +530,7 @@ impl RepoStatus {
             untracked: 0,
             conflicts: 0,
             operation: None,
+            truncated: false,
             files: Vec::new(),
             error: None,
         }
@@ -660,9 +688,10 @@ pub fn repo_status_with(project_id: &str, dir: &Path, program: Option<&Path>) ->
     if run_git_with(program, dir, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return RepoStatus::not_repo(project_id);
     }
-    match run_git_with(program, dir, &["--no-optional-locks", "status", "--porcelain=v2", "--branch"]) {
-        Ok(text) => {
-            let mut st = parse_status(project_id, &text);
+    match run_git_capped(program, dir, &["--no-optional-locks", "status", "--porcelain=v2", "--branch"]) {
+        Ok(got) => {
+            let mut st = parse_status(project_id, &got.text);
+            st.truncated = got.capped;
             st.operation = in_progress(dir);
             st
         }
@@ -901,9 +930,26 @@ pub fn parse_unified_diff(text: &str) -> Vec<FileDiff> {
     files
 }
 
-/// 未跟踪文件的“diff”= 整文件视为新增（内容预览，≤256KB）。
+/// git 自身的判据（`Buffer::is_binary`）：前 8000 字节里出现 NUL 即二进制。
+fn looks_binary(bytes: &[u8]) -> bool {
+    bytes.iter().take(8000).any(|&b| b == 0)
+}
+
+/// 未跟踪文件的“diff”= 整文件视为新增（内容预览，≤256KB）。二进制内容不做 lossy 文本渲染。
 pub fn untracked_file_diff(path: &str, abs: &Path) -> Result<FileDiff, String> {
     let bytes = std::fs::read(abs).map_err(|e| format!("读取文件失败：{e}"))?;
+    if looks_binary(&bytes) {
+        return Ok(FileDiff {
+            path: path.to_string(),
+            staged: false,
+            untracked: true,
+            binary: true,
+            truncated: false,
+            additions: 0,
+            deletions: 0,
+            hunks: Vec::new(),
+        });
+    }
     let (text, truncated) = truncate_patch(String::from_utf8_lossy(&bytes).into_owned());
     let total = text.split('\n').count();
     let mut lines = Vec::new();
@@ -977,6 +1023,310 @@ pub fn file_diff(
     f.staged = staged;
     f.truncated = truncated;
     Ok(f)
+}
+
+// ———— 二进制文件的内容预览（图片差异）————
+//
+// 文本 diff 的前提是「行」有意义；二进制没有行可言，所以 git 只报
+// "Binary files … differ"。但内容并没有丢：git 是内容寻址存储，任意版本的
+// 原始字节都可及（`HEAD:<path>`、索引 `:<path>`、`<hash>:<path>`），工作区那一
+// 侧就在磁盘上。图片又是自描述的字节串，WebView 自带解码器——所以「预览二进制
+// 差异」= 把两侧原样字节交给浏览器渲染，像素级差异由前端 canvas 算。
+
+/// 单侧预览上限。base64 后 ×1.33 且两侧都进 IPC JSON，再大就是卡顿而不是预览。
+pub const MAX_PREVIEW_BYTES: u64 = 4 * 1024 * 1024;
+
+/// 值得读出来嗅探魔数的扩展名。它只决定「要不要花这次读取」，**不是**判据——
+/// 判据是魔数（扩展名会撒谎）。代价：改名的图片（扩展名不对）不预览。
+const IMAGE_EXTS: &[&str] =
+    &["png", "apng", "jpg", "jpeg", "jfif", "gif", "bmp", "webp", "avif", "ico", "cur"];
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlobSide {
+    pub size: u64,
+    /// 魔数确认的图片 MIME；None = 不是受支持的图片格式
+    pub mime: Option<String>,
+    /// 浏览器可直接解码的 data URL；None = 非图片、超过上限或读取失败
+    pub data_url: Option<String>,
+    /// 字节数或像素数超限——前端据此显示「超出预览上限」。
+    /// 两者合一是有意的：对用户来说"看不了"是同一件事。
+    pub too_big: bool,
+    /// 从文件头读出的像素尺寸（不解码）；认不出格式时为 None
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// 单独标出"解码后太大"，与"文件本身太大"区分，便于给出准确的原因
+    pub over_pixels: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryPreview {
+    pub path: String,
+    /// 至少一侧被魔数确认为图片 → 前端走图片视图；否则只有字节数
+    pub image: bool,
+    pub old: Option<BlobSide>,
+    pub new: Option<BlobSide>,
+}
+
+pub fn has_image_extension(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    match name.rfind('.') {
+        Some(i) if i > 0 => IMAGE_EXTS.contains(&name[i + 1..].to_ascii_lowercase().as_str()),
+        _ => false,
+    }
+}
+
+/// 魔数 → 浏览器可解码的 MIME。只认 Chromium 解得动的格式（SVG 是文本，走文本 diff）。
+pub fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        return Some("image/png"); // APNG 同魔数，浏览器一并解
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes.len() >= 11 && &bytes[4..8] == b"ftyp" && matches!(&bytes[8..11], b"avi" | b"avs") {
+        return Some("image/avif");
+    }
+    // ICO/CUR：保留位=0 + 类型 1/2 + 条目数非零
+    if bytes.len() >= 6 && bytes.starts_with(&[0, 0, 1, 0]) && bytes[4..6] != [0, 0] {
+        return Some("image/x-icon");
+    }
+    // BMP 的魔数只有两字节，太容易撞上任意二进制：再要求头部声明长度与实际字节数一致。
+    if bytes.len() >= 14 && bytes.starts_with(b"BM") {
+        let declared = u32::from_le_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]) as u64;
+        if declared == bytes.len() as u64 {
+            return Some("image/bmp");
+        }
+    }
+    None
+}
+
+/// 二进制安全的 git 读取。`run_git` 返回 lossy UTF-8，会改掉任何非文本字节，
+/// 预览要的是原样字节，所以必须另走一条不转码的路。
+/// `Ok(None)` = 输出触到管道上限（内容不完整，不可信）。
+fn run_git_bytes(dir: &Path, args: &[&str]) -> Result<Option<Vec<u8>>, String> {
+    let program = resolve_git_path().ok_or_else(|| {
+        "未找到 git.exe；请在「设置 → Git 可执行文件」指定路径，或安装 Git for Windows".to_string()
+    })?;
+    let raw = spawn_git(&program, dir, args, GitRunOpts::default())?;
+    if raw.timed_out {
+        return Err("git 执行超时（已强制结束 Git 进程）".into());
+    }
+    if !raw.exit_ok {
+        return Err(friendly_git_error(&String::from_utf8_lossy(&raw.err)));
+    }
+    Ok(if raw.capped { None } else { Some(raw.out) })
+}
+
+/// revspec → (对象 id, 字节数)。该版本没有这个文件时解析失败，是「这一侧不存在」而非错误。
+fn object_of(dir: &Path, revspec: &str) -> Option<(String, u64)> {
+    let sha = run_git(dir, &["rev-parse", "--verify", "--quiet", revspec]).ok()?;
+    let sha = sha.trim().to_string();
+    if sha.len() < 4 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let size = run_git(dir, &["cat-file", "-s", sha.as_str()]).ok()?;
+    Some((sha, size.trim().parse().ok()?))
+}
+
+/// 单侧预览的**像素**上限。
+///
+/// 4MB 的字节上限约束不了内存：一张 9000×9000 的纯色 PNG 压缩后可能只有几百 KB，
+/// 但 WebView 解码成 RGBA 位图是 324MB，前端再为逐像素比较复制两份就是 1GB 量级
+/// ——足够让 WebView2 直接崩，而用户正在编辑的提交信息一起丢。
+/// 所以字节之外必须再加一道"解码后有多大"的预检：只读文件头几十个字节就能算出来，
+/// 超限时**不回传 data URL**，只报尺寸与字节数。
+pub const MAX_PREVIEW_PIXELS: u64 = 40_000_000;
+
+/// 从图片头部读尺寸（不解码）。认不出来就返回 None——此时只靠字节上限兜底。
+pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    // PNG：IHDR 紧跟签名(8) + 长度(4) + 类型(4)
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        if bytes.len() >= 24 && &bytes[12..16] == b"IHDR" {
+            let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+            let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+            return nonzero_dim(w, h);
+        }
+        return None;
+    }
+    // GIF：逻辑屏幕描述符
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        if bytes.len() >= 10 {
+            let w = u16::from_le_bytes([bytes[6], bytes[7]]) as u32;
+            let h = u16::from_le_bytes([bytes[8], bytes[9]]) as u32;
+            return nonzero_dim(w, h);
+        }
+        return None;
+    }
+    // BMP：BITMAPINFOHEADER 的宽高（有符号；负高表示自上而下）
+    if bytes.starts_with(b"BM") && bytes.len() >= 26 {
+        let w = i32::from_le_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]);
+        let h = i32::from_le_bytes([bytes[22], bytes[23], bytes[24], bytes[25]]);
+        return nonzero_dim(w.unsigned_abs(), h.unsigned_abs());
+    }
+    // JPEG：扫段找 SOFn
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return jpeg_dimensions(bytes);
+    }
+    // ICO/CUR：目录项里的宽高是单字节，0 表示 256
+    if bytes.len() >= 8 && bytes.starts_with(&[0, 0, 1, 0]) {
+        let w = if bytes[6] == 0 { 256 } else { u32::from(bytes[6]) };
+        let h = if bytes[7] == 0 { 256 } else { u32::from(bytes[7]) };
+        return nonzero_dim(w, h);
+    }
+    // WebP：VP8X / VP8（有损）/ VP8L（无损）
+    if bytes.len() >= 30 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return webp_dimensions(bytes);
+    }
+    None
+}
+
+fn nonzero_dim(w: u32, h: u32) -> Option<(u32, u32)> {
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let mut i = 2usize;
+    while i + 3 < bytes.len() {
+        if bytes[i] != 0xff {
+            i += 1;
+            continue;
+        }
+        let marker = bytes[i + 1];
+        // 填充字节与不带长度字段的标记
+        if marker == 0xff || marker == 0x01 || (0xd0..=0xd9).contains(&marker) {
+            i += 2;
+            continue;
+        }
+        let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+        // SOF0..SOF15，排除 DHT(0xC4) / JPG(0xC8) / DAC(0xCC)——它们不是 SOF
+        let is_sof =
+            (0xc0..=0xcf).contains(&marker) && marker != 0xc4 && marker != 0xc8 && marker != 0xcc;
+        if is_sof && i + 9 < bytes.len() {
+            let h = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as u32;
+            let w = u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]) as u32;
+            return nonzero_dim(w, h);
+        }
+        if len < 2 {
+            return None;
+        }
+        i += 2 + len;
+    }
+    None
+}
+
+fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    match &bytes[12..16] {
+        b"VP8X" => {
+            let w = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], 0]) + 1;
+            let h = u32::from_le_bytes([bytes[27], bytes[28], bytes[29], 0]) + 1;
+            nonzero_dim(w, h)
+        }
+        b"VP8 " => {
+            // 有损：帧同步码 9d 01 2a 之后是 14 位宽高
+            let start = (16..bytes.len().saturating_sub(7))
+                .find(|&i| bytes[i..i + 3] == [0x9d, 0x01, 0x2a])?;
+            let w = u32::from(u16::from_le_bytes([bytes[start + 3], bytes[start + 4]])) & 0x3fff;
+            let h = u32::from(u16::from_le_bytes([bytes[start + 5], bytes[start + 6]])) & 0x3fff;
+            nonzero_dim(w, h)
+        }
+        b"VP8L" => {
+            // 无损：签名 2f 之后 28 位里 14 位宽 + 14 位高
+            if bytes[20] != 0x2f {
+                return None;
+            }
+            let bits = u32::from_le_bytes([bytes[21], bytes[22], bytes[23], bytes[24]]);
+            nonzero_dim((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1)
+        }
+        _ => None,
+    }
+}
+
+fn data_url(mime: &str, bytes: &[u8]) -> String {
+    use base64::{engine::general_purpose, Engine as _};
+    format!("data:{mime};base64,{}", general_purpose::STANDARD.encode(bytes))
+}
+
+fn make_side(size: u64, limit: u64, bytes: Option<Vec<u8>>) -> BlobSide {
+    let mime = bytes.as_deref().and_then(sniff_image).map(str::to_string);
+    let dims = bytes.as_deref().and_then(image_dimensions);
+    // 字节数过关不代表解码后过关：高压缩比的大图会把 WebView 拖垮。
+    let over_pixels = dims
+        .map(|(w, h)| u64::from(w) * u64::from(h) > MAX_PREVIEW_PIXELS)
+        .unwrap_or(false);
+    let url = match (&mime, &bytes) {
+        (Some(m), Some(b)) if !over_pixels => Some(data_url(m, b)),
+        _ => None,
+    };
+    BlobSide {
+        size,
+        mime,
+        data_url: url,
+        // 前端只看这一个字段决定要不要显示「超出预览上限」，所以两种超限都要算进来。
+        too_big: size > limit || over_pixels,
+        width: dims.map(|(w, _)| w),
+        height: dims.map(|(_, h)| h),
+        over_pixels,
+    }
+}
+
+fn read_object_side(dir: &Path, specs: &[String], limit: u64, fetch: bool) -> Option<BlobSide> {
+    let (sha, size) = specs.iter().find_map(|s| object_of(dir, s))?;
+    let bytes = if fetch && size <= limit {
+        run_git_bytes(dir, &["cat-file", "blob", sha.as_str()]).ok().flatten()
+    } else {
+        None
+    };
+    Some(make_side(size, limit, bytes))
+}
+
+fn read_worktree_side(dir: &Path, path: &str, limit: u64, fetch: bool) -> Option<BlobSide> {
+    let abs = dir.join(path);
+    let size = std::fs::metadata(&abs).ok()?.len();
+    let bytes = if fetch && size <= limit { std::fs::read(&abs).ok() } else { None };
+    Some(make_side(size, limit, bytes))
+}
+
+/// `hash`=Some → 该提交 vs 第一父（History 页）；否则沿用 Changes 页语义：
+/// 暂存侧比 HEAD↔索引，未暂存/未跟踪侧比索引（回落 HEAD）↔工作区磁盘文件。
+pub fn binary_preview(
+    dir: &Path,
+    path: &str,
+    staged: bool,
+    hash: Option<&str>,
+    limit: u64,
+) -> Result<BinaryPreview, String> {
+    resolve_git_path().ok_or_else(|| {
+        "未找到 git.exe；请在「设置 → Git 可执行文件」指定路径，或安装 Git for Windows".to_string()
+    })?;
+    if path.contains(':') {
+        return Err("路径含非法字符「:」".into());
+    }
+    let fetch = has_image_extension(path);
+    let obj = path.replace('\\', "/"); // git 的对象路径一律正斜杠
+    let (old_specs, new_specs) = match hash {
+        Some(h) => {
+            validate_hash(h)?;
+            (vec![format!("{h}^:{obj}")], vec![format!("{h}:{obj}")])
+        }
+        None if staged => (vec![format!("HEAD:{obj}")], vec![format!(":{obj}")]),
+        None => (vec![format!(":{obj}"), format!("HEAD:{obj}")], Vec::new()),
+    };
+    let old = read_object_side(dir, &old_specs, limit, fetch);
+    let new = if new_specs.is_empty() {
+        read_worktree_side(dir, path, limit, fetch)
+    } else {
+        read_object_side(dir, &new_specs, limit, fetch)
+    };
+    let image = old.iter().chain(new.iter()).any(|s| s.mime.is_some());
+    Ok(BinaryPreview { path: path.to_string(), image, old, new })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1263,6 +1613,106 @@ mod tests {
     }
 
     #[test]
+    fn repo_status_defaults_to_not_truncated_and_serializes_the_flag() {
+        let st = RepoStatus::not_repo("p1");
+        assert!(!st.truncated);
+        let json = serde_json::to_string(&st).unwrap();
+        assert!(json.contains("\"truncated\":false"), "{json}");
+    }
+
+    /// 撞上 4MB 输出上限必须**如实上报**，而不是把残缺数据当完整结果用。
+    #[test]
+    fn run_git_capped_flags_output_over_the_limit() {
+        let Some(program) = resolve_git_path() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let git = |args: &[&str]| {
+            let out = Command::new(&program).arg("-C").arg(p).args(args).output().unwrap();
+            assert!(out.status.success(), "git {args:?} failed");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@e.com"]);
+        git(&["config", "user.name", "T"]);
+        // 5MB 的提交信息 → `git log --format=%B` 的输出必然超过 4MB 上限
+        let msg = p.join("msg.txt");
+        std::fs::write(&msg, "x".repeat(5 * 1024 * 1024)).unwrap();
+        let out = Command::new(&program)
+            .arg("-C")
+            .arg(p)
+            .args(["commit", "--allow-empty", "-q", "-F"])
+            .arg(&msg)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+        let small = run_git_capped(&program, p, &["status", "--porcelain=v2", "--branch"]).unwrap();
+        assert!(!small.capped, "小输出不该被标记为截断");
+        let big = run_git_capped(&program, p, &["log", "--format=%B"]).unwrap();
+        assert!(big.capped, "5MB 输出必须被标记为截断");
+        assert!(big.text.len() as u64 <= MAX_OUTPUT_BYTES);
+    }
+
+    fn png_header(w: u32, h: u32) -> Vec<u8> {
+        let mut v = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13];
+        v.extend(b"IHDR");
+        v.extend(w.to_be_bytes());
+        v.extend(h.to_be_bytes());
+        v.extend([0u8; 16]);
+        v
+    }
+
+    /// 像素预检是 H3 的核心防线：字节数小不代表解码后小。
+    #[test]
+    fn image_dimensions_matrix() {
+        assert_eq!(image_dimensions(&png_header(800, 600)), Some((800, 600)));
+
+        let mut gif = b"GIF89a".to_vec();
+        gif.extend(320u16.to_le_bytes());
+        gif.extend(240u16.to_le_bytes());
+        assert_eq!(image_dimensions(&gif), Some((320, 240)));
+
+        let mut bmp = b"BM".to_vec();
+        bmp.extend([0u8; 16]);
+        bmp.extend(100i32.to_le_bytes());
+        bmp.extend((-50i32).to_le_bytes()); // 负高 = 自上而下
+        assert_eq!(image_dimensions(&bmp), Some((100, 50)));
+
+        // SOF0：ff c0, len=0x11, 精度 08, 高 0x012c=300, 宽 0x01f4=500
+        let jpeg = vec![
+            0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x01, 0x2c, 0x01, 0xf4, 0x03, 0x01, 0x11,
+            0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
+        ];
+        assert_eq!(image_dimensions(&jpeg), Some((500, 300)));
+
+        // ICO 里 0 表示 256
+        assert_eq!(image_dimensions(&[0, 0, 1, 0, 1, 0, 0, 0]), Some((256, 256)));
+
+        // 认不出来时不能瞎猜（此时只靠字节上限兜底）
+        assert_eq!(image_dimensions(b"not an image at all"), None);
+        assert_eq!(image_dimensions(&png_header(0, 600)), None);
+    }
+
+    #[test]
+    fn make_side_drops_data_url_when_pixels_are_too_many() {
+        // 9000×9000 = 8100 万像素，压缩后可能只有几百 KB，但解码是 324MB
+        let big = png_header(9000, 9000);
+        let side = make_side(big.len() as u64, MAX_PREVIEW_BYTES, Some(big));
+        assert_eq!(side.mime.as_deref(), Some("image/png"));
+        assert_eq!((side.width, side.height), (Some(9000), Some(9000)));
+        assert!(side.over_pixels);
+        assert!(side.too_big, "前端只看 too_big，两种超限都要算进来");
+        assert!(side.data_url.is_none(), "超像素上限时绝不能回传 data URL");
+
+        // 正常尺寸照常回传
+        let ok = png_header(64, 64);
+        let small = make_side(ok.len() as u64, MAX_PREVIEW_BYTES, Some(ok));
+        assert!(!small.over_pixels);
+        assert!(!small.too_big);
+        assert!(small.data_url.is_some());
+        assert_eq!((small.width, small.height), (Some(64), Some(64)));
+    }
+
+    #[test]
     fn friendly_error_detects_non_repo() {
         assert!(is_not_repo("fatal: not a git repository (or any of the parent directories): .git"));
         assert_eq!(friendly_git_error("fatal: not a git repository (or any of the parent directories): .git"), "不是 git 仓库");
@@ -1462,6 +1912,139 @@ mod tests {
         assert!(st.is_repo);
         assert!(st.branch.is_some());
         assert_eq!(git_log(repo.path(), 100, 0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sniffs_image_magic_and_rejects_lookalikes() {
+        assert_eq!(sniff_image(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]), Some("image/png"));
+        assert_eq!(sniff_image(&[0xff, 0xd8, 0xff, 0xe0]), Some("image/jpeg"));
+        assert_eq!(sniff_image(b"GIF89a...."), Some("image/gif"));
+        assert_eq!(sniff_image(b"GIF87a...."), Some("image/gif"));
+        assert_eq!(sniff_image(b"RIFF\x04\x00\x00\x00WEBPVP8 "), Some("image/webp"));
+        assert_eq!(sniff_image(b"\x00\x00\x00\x1cftypavif"), Some("image/avif"));
+        assert_eq!(sniff_image(&[0, 0, 1, 0, 1, 0]), Some("image/x-icon"));
+        let mut bmp = b"BM".to_vec();
+        bmp.extend_from_slice(&14u32.to_le_bytes());
+        bmp.extend_from_slice(&[0u8; 8]);
+        assert_eq!(sniff_image(&bmp), Some("image/bmp"));
+        // BMP/ICO 的魔数太弱：自洽性不成立就当二进制，否则任意文件都可能撞上
+        let mut fake_bmp = b"BM".to_vec();
+        fake_bmp.extend_from_slice(&4096u32.to_le_bytes());
+        fake_bmp.extend_from_slice(&[0u8; 8]);
+        assert_eq!(sniff_image(&fake_bmp), None);
+        assert_eq!(sniff_image(&[0, 0, 1, 0, 0, 0]), None);
+        assert_eq!(sniff_image(b"GIF88a...."), None);
+        assert_eq!(sniff_image(b"just a plain text file"), None);
+        assert_eq!(sniff_image(&[]), None);
+    }
+
+    #[test]
+    fn image_extension_gate_decides_fetching_only() {
+        assert!(has_image_extension("art/Player.PNG"));
+        assert!(has_image_extension("icon.ico"));
+        assert!(has_image_extension("a\\b\\c.jpeg"));
+        assert!(!has_image_extension("README.md"));
+        assert!(!has_image_extension("LICENSE"));
+        assert!(!has_image_extension(".pngrc")); // 以点开头 ≠ 有扩展名
+        assert!(!has_image_extension("scene.svg")); // SVG 是文本，本就走文本 diff
+    }
+
+    #[test]
+    fn untracked_binary_file_is_not_rendered_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("blob.dat");
+        std::fs::write(&bin, b"ab\x00cd").unwrap();
+        let f = untracked_file_diff("blob.dat", &bin).unwrap();
+        assert!(f.binary, "含 NUL 的未跟踪文件不该按文本渲染");
+        assert!(f.hunks.is_empty());
+
+        let txt = dir.path().join("note.txt");
+        std::fs::write(&txt, "line1\nline2").unwrap();
+        let f = untracked_file_diff("note.txt", &txt).unwrap();
+        assert!(!f.binary);
+        assert_eq!(f.hunks[0].lines.len(), 2);
+    }
+
+    /// 仓库自带图标：两张真实、尺寸不同的 PNG，正好当「同一张图片的两个版本」。
+    fn fixture_pngs() -> Option<(Vec<u8>, Vec<u8>)> {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let a = std::fs::read(format!("{root}/icons/32x32.png")).ok()?;
+        let b = std::fs::read(format!("{root}/icons/128x128.png")).ok()?;
+        Some((a, b))
+    }
+
+    #[test]
+    fn binary_preview_reads_both_image_sides_verbatim() {
+        let program = match resolve_git_path() {
+            Some(p) => p,
+            None => return,
+        };
+        let (old_png, new_png) = match fixture_pngs() {
+            Some(p) => p,
+            None => return,
+        };
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new(&program).current_dir(repo.path()).args(args).output().unwrap();
+            assert!(out.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let decode = |url: &str, mime: &str| -> Vec<u8> {
+            use base64::{engine::general_purpose, Engine as _};
+            let prefix = format!("data:{mime};base64,");
+            assert!(url.starts_with(&prefix), "意外的 data URL 前缀：{}", &url[..prefix.len() + 8]);
+            general_purpose::STANDARD.decode(&url[prefix.len()..]).unwrap()
+        };
+
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "devlaunch@example.com"]);
+        git(&["config", "user.name", "DevLaunch Test"]);
+        std::fs::create_dir(repo.path().join("art")).unwrap();
+        let sprite = repo.path().join("art/player.png");
+        std::fs::write(&sprite, &old_png).unwrap();
+        git(&["add", "art/player.png"]);
+        git(&["commit", "-q", "-m", "sprite"]);
+        let first = git(&["rev-parse", "HEAD"]).trim().to_string();
+        std::fs::write(&sprite, &new_png).unwrap(); // 第二版：只改工作区
+
+        // 未暂存 = 索引（第一版）↔ 工作区磁盘（第二版）；字节必须原样往返，
+        // 因为 run_git 的 lossy UTF-8 会改掉任何非文本字节。
+        let p = binary_preview(repo.path(), "art/player.png", false, None, MAX_PREVIEW_BYTES).unwrap();
+        assert!(p.image, "PNG 应按图片预览");
+        let (o, n) = (p.old.as_ref().unwrap(), p.new.as_ref().unwrap());
+        assert_eq!((o.size as usize, n.size as usize), (old_png.len(), new_png.len()));
+        assert_eq!(o.mime.as_deref(), Some("image/png"));
+        assert_eq!(decode(&o.data_url.clone().unwrap(), "image/png"), old_png);
+        assert_eq!(decode(&n.data_url.clone().unwrap(), "image/png"), new_png);
+
+        // 暂存 = HEAD ↔ 索引
+        git(&["add", "art/player.png"]);
+        let p = binary_preview(repo.path(), "art/player.png", true, None, MAX_PREVIEW_BYTES).unwrap();
+        assert_eq!(decode(&p.new.as_ref().unwrap().data_url.clone().unwrap(), "image/png"), new_png);
+        assert_eq!(decode(&p.old.as_ref().unwrap().data_url.clone().unwrap(), "image/png"), old_png);
+
+        // History = 该提交 ↔ 第一父；首次提交无父 → 只剩新侧
+        let p = binary_preview(repo.path(), "art/player.png", false, Some(&first), MAX_PREVIEW_BYTES).unwrap();
+        assert!(p.old.is_none(), "首次提交没有父版本");
+        assert_eq!(decode(&p.new.as_ref().unwrap().data_url.clone().unwrap(), "image/png"), old_png);
+
+        // 超过上限：不读内容（也不去碰大对象），但字节数照报
+        let p = binary_preview(repo.path(), "art/player.png", false, None, 16).unwrap();
+        assert!(!p.image);
+        assert!(p.old.as_ref().unwrap().too_big && p.new.as_ref().unwrap().too_big);
+        assert!(p.old.as_ref().unwrap().data_url.is_none());
+
+        // 非图片：扩展名不入围 → 不读内容，只有大小
+        std::fs::write(repo.path().join("notes.txt"), "text").unwrap();
+        git(&["add", "notes.txt"]);
+        let p = binary_preview(repo.path(), "notes.txt", true, None, MAX_PREVIEW_BYTES).unwrap();
+        assert!(!p.image);
+        assert!(p.old.is_none());
+        assert_eq!(p.new.as_ref().unwrap().size, 4);
+
+        // 注入面：选项形状与 revspec 分隔符都必须被拒
+        assert!(binary_preview(repo.path(), "art/player.png", false, Some("--all"), 1 << 20).is_err());
+        assert!(binary_preview(repo.path(), "..:escape", false, None, 1 << 20).is_err());
     }
 
     fn commit(hash: &str, parents: &[&str]) -> Commit {

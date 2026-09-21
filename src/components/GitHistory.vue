@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { relTime } from '../utils'
 import { gitCommitDetail } from '../api'
 import type { CommitDetail } from '../types'
 import {
@@ -26,7 +27,12 @@ const rows = computed(() => historyRows.value ?? baseRows.value)
 
 const query = ref('')
 const author = ref('')
-const filtering = computed(() => !!query.value.trim() || !!author.value.trim())
+// 已**应用**的筛选条件。输入框只是草稿：只有按回车或点「筛选」才生效。
+// 否则"输入了词但没回车就往下滚"会用新 query 配旧的 skip 去追加，
+// 把筛选结果接到未筛选列表后面——列表出现重复、空洞、`exhausted` 判定也失真。
+const appliedQuery = ref('')
+const appliedAuthor = ref('')
+const filtering = computed(() => !!appliedQuery.value || !!appliedAuthor.value)
 
 const selected = ref('')
 const detail = ref<CommitDetail | null>(null)
@@ -51,6 +57,8 @@ watch(
     seq++
     query.value = ''
     author.value = ''
+    appliedQuery.value = ''
+    appliedAuthor.value = ''
     selected.value = ''
     detail.value = null
     loading.value = false
@@ -59,6 +67,21 @@ watch(
   },
 )
 
+/** 把输入框的草稿提交为生效的筛选条件。 */
+function applyFilters() {
+  appliedQuery.value = query.value.trim()
+  appliedAuthor.value = author.value.trim()
+  void reload()
+}
+
+function clearFilters() {
+  query.value = ''
+  author.value = ''
+  appliedQuery.value = ''
+  appliedAuthor.value = ''
+  void reload()
+}
+
 async function reload() {
   historyRows.value = null
   historyPath.value = ''
@@ -66,7 +89,7 @@ async function reload() {
   detail.value = null
   exhausted = false
   try {
-    if (filtering.value) await loadLogFiltered(props.projectId, true, query.value, author.value)
+    if (filtering.value) await loadLogFiltered(props.projectId, true, appliedQuery.value, appliedAuthor.value)
     else await loadLog(props.projectId, true)
   } catch (e) {
     error.value = `${e}`
@@ -81,7 +104,8 @@ async function onScroll(e: Event) {
   if (before === 0) return
   loadingMore = true
   try {
-    await loadLogFiltered(props.projectId, false, query.value, author.value)
+    // 用**已应用**的条件，保证 skip 与列表实际来源一致
+    await loadLogFiltered(props.projectId, false, appliedQuery.value, appliedAuthor.value)
     if (rows.value.length === before) exhausted = true
   } catch (e) {
     error.value = `${e}`
@@ -107,18 +131,6 @@ async function select(hash: string) {
   } finally {
     if (mine === seq) loading.value = false
   }
-}
-
-function relTime(iso: string): string {
-  const t = Date.parse(iso)
-  if (Number.isNaN(t)) return iso
-  const d = Date.now() - t
-  const day = 86_400_000
-  if (d < 60_000) return '刚刚'
-  if (d < 3_600_000) return `${Math.floor(d / 60_000)} 分钟前`
-  if (d < day) return `${Math.floor(d / 3_600_000)} 小时前`
-  if (d < day * 30) return `${Math.floor(d / day)} 天前`
-  return new Date(t).toLocaleDateString()
 }
 
 async function copyText(text: string) {
@@ -210,10 +222,10 @@ function backToAll() {
   <div class="git-history" @click="closeMenus">
     <div class="git-history-log">
       <div class="history-filters">
-        <input v-model="query" class="inline mono" placeholder="搜索提交信息…" spellcheck="false" @keydown.enter.prevent="reload" />
-        <input v-model="author" class="inline mono" placeholder="作者" spellcheck="false" @keydown.enter.prevent="reload" />
-        <button class="ghost" @click="reload">筛选</button>
-        <button v-if="filtering || historyPath" class="ghost" @click="query = ''; author = ''; reload()">清除</button>
+        <input v-model="query" class="inline mono" placeholder="搜索提交信息…" spellcheck="false" @keydown.enter.prevent="applyFilters" />
+        <input v-model="author" class="inline mono" placeholder="作者" spellcheck="false" @keydown.enter.prevent="applyFilters" />
+        <button class="ghost" @click="applyFilters">筛选</button>
+        <button v-if="filtering || historyPath" class="ghost" @click="clearFilters">清除</button>
       </div>
       <div v-if="historyPath" class="file-history-head mono">
         <button class="ghost" @click="backToAll">← 全部历史</button>
@@ -263,7 +275,7 @@ function backToAll() {
           <span class="diff-stat-del">−{{ f.deletions }}</span>
         </div>
       </div>
-      <GitDiff :file="currentFile" :loading="loading" />
+      <GitDiff :file="currentFile" :loading="loading" :project-id="projectId" :hash="selected" />
     </div>
 
     <div v-if="menu" class="ctx-menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }" @click.stop>

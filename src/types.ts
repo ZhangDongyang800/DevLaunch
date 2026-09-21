@@ -53,6 +53,12 @@ export interface ProjectTemplate {
   version: number
   name: string
   items: Item[]
+  /**
+   * 模板 v4 起携带的环境**政策段**（root / copy / portBase / portKey，不含 leases）。
+   * Rust 侧 `ProjectTemplate` 一直有并会序列化它——这里过去漏了，导致
+   * `readProjectTemplate` 的声明类型与真实返回值不一致（类型在说谎）。
+   */
+  worktree?: WorktreeSettings | null
 }
 
 export interface Suggestion {
@@ -95,6 +101,8 @@ export interface RepoStatus {
   untracked: number
   conflicts: number
   operation: string | null
+  /** `git status` 输出撞上 4MB 上限被截断 → 上面的计数与 files 都不完整 */
+  truncated: boolean
   files: FileChange[]
   error: string | null
 }
@@ -173,6 +181,28 @@ export interface FileDiff {
   additions: number
   deletions: number
   hunks: Hunk[]
+}
+
+/** 二进制文件的一侧：字节数 + 魔数确认的图片 MIME + 可直接渲染的 data URL。 */
+export interface BlobSide {
+  size: number
+  mime: string | null
+  dataUrl: string | null
+  /** 字节数或像素数超限（两者对用户是同一件事） */
+  tooBig: boolean
+  /** 从文件头读出的像素尺寸，不解码；认不出格式时为 null */
+  width: number | null
+  height: number | null
+  /** 单独标出"解码后太大"，便于说清是哪种超限 */
+  overPixels: boolean
+}
+
+export interface BinaryPreview {
+  path: string
+  /** 至少一侧被魔数确认为图片；否则只有字节数可看 */
+  image: boolean
+  old: BlobSide | null
+  new: BlobSide | null
 }
 
 export interface Commit {

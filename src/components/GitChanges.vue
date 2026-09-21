@@ -12,11 +12,24 @@ const emit = defineEmits<{ notify: [msg: string, kind?: 'ok' | 'err'] }>()
 
 const status = computed(() => statuses.value[props.projectId])
 const files = computed<FileChange[]>(() => status.value?.files ?? [])
+
+/**
+ * 冲突文件：porcelain v2 的 `u ` 记录，index 与 worktree 都是 `U`。
+ * 后端有意把它同时计入 staged 与 unstaged（计数更贴近"有事要做"），
+ * 但**列表**必须只出现一次，否则同一个文件带两个复选框、两次丢弃按钮。
+ */
+function isConflict(f: FileChange): boolean {
+  return f.index === 'U' || f.worktree === 'U'
+}
+
+const conflictCount = computed(() => files.value.filter(isConflict).length)
 const stagedFiles = computed(() =>
   files.value.filter((f) => f.index !== '.' && f.index !== '?' && f.index !== '!' && f.index !== ' '),
 )
 const unstagedFiles = computed(() =>
-  files.value.filter((f) => f.worktree !== '.' && f.worktree !== '?' && f.worktree !== '!' && f.worktree !== ' '),
+  files.value.filter(
+    (f) => !isConflict(f) && f.worktree !== '.' && f.worktree !== '?' && f.worktree !== '!' && f.worktree !== ' ',
+  ),
 )
 const untrackedFiles = computed(() => files.value.filter((f) => f.index === '?'))
 const fileMap = computed(() => new Map(files.value.map((f) => [f.path, f])))
@@ -131,6 +144,8 @@ function statusLetter(f: FileChange): string {
       <div class="file-section">
         <div class="fs-head">
           <span>已暂存 ({{ stagedFiles.length }})</span>
+          <span v-if="conflictCount" class="v-spacer" />
+          <span v-if="conflictCount" class="gc-empty">含 {{ conflictCount }} 个冲突，请在终端解决</span>
           <span class="v-spacer" />
           <button class="ghost" :disabled="busy || stagedFiles.length === 0" @click="unstageAll">全部取消暂存</button>
         </div>
@@ -227,6 +242,7 @@ function statusLetter(f: FileChange): string {
         :loading="loading"
         :ignore-whitespace="ignoreWhitespace"
         :full-context="fullContext"
+        :project-id="projectId"
         @toggle-whitespace="toggleWhitespace"
         @expand-all="toggleFullContext"
       />
