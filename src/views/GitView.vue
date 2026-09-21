@@ -33,12 +33,20 @@ watch(
   },
 )
 
+/** 焦点在输入框/文本域里时不劫持按键：Ctrl+F 想「查找」、Ctrl+R 可能只是误按。 */
+function typingInField(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const tag = target.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable
+}
+
 function onKey(e: KeyboardEvent) {
-  if (!e.ctrlKey) return
+  if (!e.ctrlKey || typingInField(e.target)) return
   const k = e.key.toLowerCase()
   if (k === 'r') {
     e.preventDefault()
     if (selectedRepoId.value) {
+      void refreshStatuses(projects.value.map((p) => p.id), true)
       void refreshRepo(selectedRepoId.value)
       void loadLastFetch(selectedRepoId.value)
     }

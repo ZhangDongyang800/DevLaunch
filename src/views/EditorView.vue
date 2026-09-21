@@ -7,6 +7,11 @@ import { newId, newItem, type DetectResult, type Item } from '../types'
 const props = defineProps<{ projectId: string }>()
 const emit = defineEmits<{ back: []; notify: [msg: string, kind?: 'ok' | 'err'] }>()
 
+/**
+ * 前置条件：`App.vue` 只在 `projectId` 确实存在于配置里时才挂载本组件
+ * （见 `App.vue` 的 editor 分支）。项目可能在别处被删掉，那时这里会抛错并
+ * 白屏——所以这道保证必须由**调用方**给，而不是靠 `!` 把类型系统按下去。
+ */
 const project = computed(() => config.value!.projects.find((p) => p.id === props.projectId)!)
 const savedSnapshot = ref(JSON.stringify(project.value))
 const dirty = computed(() => JSON.stringify(project.value) !== savedSnapshot.value)
@@ -133,7 +138,12 @@ async function tryAutoImport() {
       ensureItemIds(tpl.items)
       project.value.name = tpl.name || project.value.name
       project.value.items = tpl.items
-      emit('notify', '已从项目根目录 devlaunch.json 导入启动项')
+      emit(
+        'notify',
+        tpl.worktree
+          ? '已从项目根目录导入启动项（模板含环境政策段，未应用，请在环境页配置）'
+          : '已从项目根目录 devlaunch.json 导入启动项',
+      )
     }
   } catch {
     // 没有项目文件时静默
@@ -242,7 +252,18 @@ async function doImport() {
     project.value.items = tpl.items
     await persist()
     savedSnapshot.value = JSON.stringify(project.value)
-    emit('notify', '项目配置已导入')
+    // 模板 v4 可以携带环境政策段（root / copy / portBase / portKey），但导入目前
+    // 只应用 name + items。**必须说出来**：静默丢弃会让用户以为"团队共享的环境
+    // 配置已经带过来了"，然后在环境页看到一个空配置——而 `types.ts` 过去连这个
+    // 字段都没声明，等于连"有没有"都无从判断。
+    if (tpl.worktree) {
+      emit(
+        'notify',
+        '已导入启动项；模板里的环境政策段（根目录 / 复制白名单 / 端口起点）未应用，请在环境页手动配置',
+      )
+    } else {
+      emit('notify', '项目配置已导入')
+    }
   } catch (e) {
     emit('notify', `导入失败：${e}`, 'err')
   }

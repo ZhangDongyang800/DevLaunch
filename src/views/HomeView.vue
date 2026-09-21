@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { config, persist } from '../store'
-import { newId, type Item, type Project } from '../types'
+import { newId, type Project } from '../types'
 import { getConfig, launchProject, openDir } from '../api'
-import { filterProjects, sortProjects } from '../utils'
+import { filterProjects, itemLabel, sortProjects } from '../utils'
 import GitBadge from '../components/GitBadge.vue'
 import { gitError, refreshStatuses, statuses } from '../gitStore'
 
@@ -38,6 +38,9 @@ const launchingId = ref('')
 const lastLaunchAt = new Map<string, number>()
 let confirmTimer: number | undefined
 
+// 卸载后回调还会写 ref（Vue 3 不报错，但属明确的资源泄漏）。
+onUnmounted(() => clearTimeout(confirmTimer))
+
 function removeProject(id: string) {
   if (confirmDeleteId.value !== id) {
     confirmDeleteId.value = id
@@ -52,11 +55,6 @@ function removeProject(id: string) {
   persist()
     .then(() => emit('notify', '项目已删除'))
     .catch((e) => emit('notify', `删除失败：${e}`, 'err'))
-}
-
-function itemLabel(i: Item): string {
-  const cmd = i.command.trim().split('\n')[0]?.trim().split(/\s+/)[0] || ''
-  return (i.name || cmd || '未命名').trim()
 }
 
 async function launch(id: string) {

@@ -27,6 +27,8 @@ const statuses = ref<Record<string, RepoStatus>>({})
 const loadError = ref('')
 const busy = ref(false)
 let statusSeq = 0
+/** 仓库切换的序号：`view` / `worktrees` / 草稿都必须只接受最新一次请求的结果。 */
+let viewSeq = 0
 
 // 设置草稿（保存后写回配置）
 const draft = reactive<{ root: string; portBase: string; portKey: string; copy: string }>({
@@ -47,6 +49,7 @@ function fillDraft(s: WorktreeSettings | undefined) {
 }
 
 async function refresh(id: string) {
+  const mine = ++viewSeq
   if (!id) {
     view.value = null
     worktrees.value = []
@@ -56,12 +59,16 @@ async function refresh(id: string) {
   }
   try {
     const [v, list] = await Promise.all([worktreeSettings(id), gitWorktrees(id)])
+    // 快速切换仓库时，旧响应不能覆盖新仓库的列表与草稿。`fillDraft` 尤其危险：
+    // 它会把 A 的 root / portBase / copy 填进草稿，用户此时点保存就写进了 B 的项目。
+    if (mine !== viewSeq) return
     view.value = v
     worktrees.value = list
     loadError.value = ''
     fillDraft(v.settings)
     void refreshStatuses(id)
   } catch (e) {
+    if (mine !== viewSeq) return
     emit('notify', `${e}`, 'err')
     view.value = null
     worktrees.value = []

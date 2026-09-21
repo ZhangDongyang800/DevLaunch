@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import { getConfig, gitWorktrees, hidePalette, launchItem, launchProject, launchWorktree, openDir } from './api'
 import { applyTheme } from './store'
-import { filterProjects, sortProjects } from './utils'
+import { filterProjects, itemLabel, sortProjects } from './utils'
 import type { AppConfig, Item, Project, WorktreeInfo } from './types'
 
 const cfg = ref<AppConfig | null>(null)
@@ -175,11 +175,6 @@ async function openDirOf(p: Project) {
   }
 }
 
-function itemLabel(it: Item): string {
-  const cmd = it.command.trim().split('\n')[0]?.trim().split(/\s+/)[0] || ''
-  return (it.name || cmd || '未命名').trim()
-}
-
 function onKeydown(e: KeyboardEvent) {
   // 输入法组合期间不接管按键：否则中文输入按 Esc 取消候选会直接关掉面板。
   if (e.isComposing) return
@@ -210,12 +205,13 @@ function onKeydown(e: KeyboardEvent) {
     return
   }
   if (e.key === 'Tab' || e.key === 'ArrowRight') {
+    // 面板是纯键盘驱动的：Tab 必须**始终**拦下。此前只在"有项目可钻入"时
+    // preventDefault，焦点一旦跑出输入框，↑↓/Enter 就全部失效——面板看起来
+    // 就像"卡住了"，用户只能 Esc 关掉重开。
+    e.preventDefault()
     if (drilled.value) return
     const p = projects.value[selected.value]
-    if (p) {
-      e.preventDefault()
-      drill(p)
-    }
+    if (p) drill(p)
     return
   }
   if (e.key === 'Enter') {
@@ -238,6 +234,9 @@ function onKeydown(e: KeyboardEvent) {
 let unlisten: (() => void) | undefined
 
 onMounted(async () => {
+  // 挂在 window 上而不是模板根节点：根 div 不可聚焦，`@keydown` 只在输入框
+  // 还持有焦点时才收得到——焦点一旦逃逸，整个键盘导航就静默失效。
+  window.addEventListener('keydown', onKeydown)
   await reload()
   unlisten = await listen('palette-shown', async () => {
     await reload()
@@ -250,11 +249,14 @@ onMounted(async () => {
   })
 })
 
-onUnmounted(() => unlisten?.())
+onUnmounted(() => {
+  unlisten?.()
+  window.removeEventListener('keydown', onKeydown)
+})
 </script>
 
 <template>
-  <div class="palette" @keydown="onKeydown">
+  <div class="palette">
     <input
       ref="inputRef"
       v-model="query"

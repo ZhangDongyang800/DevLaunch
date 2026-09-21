@@ -5,7 +5,19 @@ import { theme } from '../store'
 
 const props = defineProps<{ rows: GraphRow[]; selected: string }>()
 
-const ROW = 22
+/** 读一个 px 数值的 CSS token；取不到就用兜底值。 */
+function readPx(name: string, fallback: number): number {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  const n = Number.parseFloat(raw)
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
+/**
+ * 行高必须与 DOM 列表的行高一致（`style.css` 的 `--graph-row`），否则 SVG 泳道
+ * 与提交行会逐行错位。此前这里是硬编码的 22，与 CSS 里的 `height: 22px` 跨语言
+ * 耦合、只靠注释维系——现在两边都从同一个 token 取值。
+ */
+const ROW = readPx('--graph-row', 22)
 const COL = 14
 const PAD = 10
 

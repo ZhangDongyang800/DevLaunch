@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Project, RepoStatus } from '../types'
+import { relTime, sortProjects } from '../utils'
 import {
   branches,
   busy,
@@ -41,12 +42,8 @@ const canPush = computed(() => !blocked.value && (ahead.value > 0 || !hasUpstrea
 const lastFetchText = computed(() => {
   const t = selected.value ? lastFetch.value[selected.value.id] : null
   if (!t) return '从未'
-  const d = Date.now() - t * 1000
-  const day = 86_400_000
-  if (d < 60_000) return '刚刚'
-  if (d < 3_600_000) return `${Math.floor(d / 60_000)} 分钟前`
-  if (d < day) return `${Math.floor(d / 3_600_000)} 小时前`
-  return `${Math.floor(d / day)} 天前`
+  // 后端给的是 Unix 秒
+  return relTime(t * 1000)
 })
 
 // ---- 仓库选择器（自定义：名称 + 路径 + 最近使用排序 + 搜索）----
@@ -54,9 +51,8 @@ const repoOpen = ref(false)
 const repoQuery = ref('')
 const repoSearch = ref<HTMLInputElement>()
 
-const sortedProjects = computed(() =>
-  [...props.projects].sort((a, b) => (b.lastLaunchedAt ?? 0) - (a.lastLaunchedAt ?? 0)),
-)
+// 这里的语义是"最近用过的排前面"，与收藏无关 → 用同一份排序实现、关掉收藏优先。
+const sortedProjects = computed(() => sortProjects(props.projects, false))
 const filteredProjects = computed(() => {
   const q = repoQuery.value.trim().toLowerCase()
   if (!q) return sortedProjects.value
@@ -90,6 +86,13 @@ function dirty(p: Project) {
   const s = statuses.value[p.id]
   return s ? s.staged + s.unstaged + s.untracked : 0
 }
+
+/** 下拉里每个仓库的脏计数：预计算一次，别在模板里每行算 3 遍。 */
+const dirtyCounts = computed<Record<string, number>>(() => {
+  const out: Record<string, number> = {}
+  for (const p of props.projects) out[p.id] = dirty(p)
+  return out
+})
 
 const mode = ref<'' | 'new' | 'rename' | 'delete' | 'merge' | 'rebase'>('')
 const input = ref('')
@@ -232,7 +235,8 @@ async function doPush() {
 }
 
 async function refreshAll() {
-  await refreshStatuses(props.projects.map((p) => p.id))
+  // 手动刷新要绕过 TTL 缓存（用户点 ⟳ 就是想要最新的）。
+  await refreshStatuses(props.projects.map((p) => p.id), true)
   if (selectedRepoId.value) {
     await refreshRepo(selectedRepoId.value)
     await loadLastFetch(selectedRepoId.value)
@@ -260,7 +264,7 @@ async function refreshAll() {
           >
             <div class="repo-item-head">
               <span class="repo-item-name">{{ p.name || '未命名项目' }}</span>
-              <span v-if="dirty(p)" class="gb-dirty mono">●{{ dirty(p) }}</span>
+              <span v-if="dirtyCounts[p.id]" class="gb-dirty mono">●{{ dirtyCounts[p.id] }}</span>
             </div>
             <div class="repo-item-path mono">{{ p.rootDir || '未设置根目录' }}</div>
           </div>

@@ -63,6 +63,11 @@
   --ctrl-h: 26px;
   --ctrl-h-sm: 22px;
   --badge-h: 18px;
+
+  /* 提交图的行高。SVG 泳道坐标与 DOM 行高**必须一致**，否则图与列表逐行错位。
+     GitGraph.vue 用 getComputedStyle 读这个值（取不到时兜底 22），
+     所以改这里就够了，不必再去改 JS。 */
+  --graph-row: 22px;
 }
 
 /* ============================================================
@@ -1236,6 +1241,9 @@ button.star.on { color: var(--signal); }
 .diff-body { flex: 1; min-height: 0; overflow: auto; }
 .diff-hunk-head { padding: 3px 8px; color: var(--faint); background: var(--bg); font-size: 10.5px; position: sticky; top: 0; }
 .diff-line { display: flex; align-items: baseline; gap: 6px; padding: 0 8px; font-size: 11px; white-space: pre; }
+/* 「展开全部」后一个 hunk 可能有几千行、每行 4 个 span。跳过屏幕外的布局与绘制，
+   滚动时再补上；`contain-intrinsic-size` 保证滚动条长度不跳。 */
+.diff-line { content-visibility: auto; contain-intrinsic-size: auto 17px; }
 .diff-line.half { width: 50%; overflow: hidden; }
 .dl-no { width: 34px; text-align: right; color: var(--faint); flex-shrink: 0; }
 .dl-mark { width: 10px; flex-shrink: 0; }
@@ -1480,7 +1488,7 @@ button.star.on { color: var(--signal); }
 .git-log-scroll { display: flex; align-items: flex-start; }
 .git-graph { flex-shrink: 0; }
 .git-log-list { flex: 1; min-width: 0; }
-.git-log-list .gt-commit { height: 22px; align-items: center; }
+.git-log-list .gt-commit { height: var(--graph-row); align-items: center; }
 
 /* ---------- git history ---------- */
 

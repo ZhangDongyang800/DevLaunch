@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { config, persist } from '../store'
 import { newId, type DetectedProject, type Project } from '../types'
 import { scanWorkspace } from '../api'
@@ -11,6 +11,17 @@ const scanning = ref(false)
 const importing = ref(false)
 const results = ref<DetectedProject[]>([])
 const checked = ref<boolean[]>([])
+
+/**
+ * 扫描是异步 IPC，用户完全可能在它返回前切走这一页。此时再写 ref 会把结果
+ * 落在已卸载的组件上——下次回到这一页看到的是上一次的残留，而且 `checked`
+ * 与 `results` 可能因中途重置而错位。
+ */
+let alive = true
+let scanSeq = 0
+onUnmounted(() => {
+  alive = false
+})
 
 const ecosystemLabels: Record<string, string> = { node: 'Node', rust: 'Rust', go: 'Go', python: 'Python' }
 
@@ -34,18 +45,22 @@ async function choosePath() {
 async function doScan() {
   const root = scanPath.value.trim()
   if (!root || scanning.value) return
+  const seq = ++scanSeq
   scanning.value = true
   results.value = []
   checked.value = []
   try {
     const found = await scanWorkspace(root)
+    // 卸载后到达、或被后一次扫描取代的响应一律丢弃
+    if (!alive || seq !== scanSeq) return
     results.value = found
     checked.value = found.map((r) => !r.alreadyImported)
     if (found.length === 0) emit('notify', '未在该目录下发现 git 仓库')
   } catch (e) {
+    if (!alive || seq !== scanSeq) return
     emit('notify', `扫描失败：${e}`, 'err')
   } finally {
-    scanning.value = false
+    if (alive && seq === scanSeq) scanning.value = false
   }
 }
 
