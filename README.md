@@ -66,13 +66,11 @@ Of course, it cannot fix bugs or other development problems for you. It only wor
 
 - **Tray resident**: launch any project from the right-click menu, with optional launch at login
 
-- **Global shortcut**: press `Ctrl+Alt+D` to open a search palette — type to filter, press Enter to launch. Press `→` to drill into a project: environments of that repo are listed first (`⎇ branch` + its port) and Enter launches that environment; below them are the individual startup items. Rebindable in Settings.
+- **Global shortcut**: press `Ctrl+Alt+D` to open a search palette — type to filter, press Enter to launch. Press `→` to drill into a project, then press Enter to launch an individual startup item. Rebindable in Settings.
 
 - **Favorites and recents**: pin frequently used projects; launched projects are ordered by recency.
 
 - **Four colour themes**: Signal (black + green, the default), Graphite, Indigo and Amber, chosen in Settings and remembered per machine. A theme only recolours design tokens — layout, spacing and type stay identical — and the search palette follows the same setting.
-
-- **Per-task environments (git worktree)**: for repos where several tasks run in parallel, enable environments on a project and DevLaunch creates one worktree per branch under a root you choose, optionally copying only the local (untracked) files you allow-list. Launching an environment runs that project's startup items inside its worktree and injects `DEVLAUNCH_WORKTREE`, `DEVLAUNCH_WORKTREE_BRANCH` and — if you set a port base — a stable `PORT` for that branch. The port number is only an environment variable: DevLaunch never probes, reserves or monitors ports, and never waits for a service to come up.
 
 - **Git page (GitHub Desktop-style)**: a searchable repo picker (name + path, most-recent first) plus `Changes | History` tabs and keyboard shortcuts (`Ctrl+R` refresh, `Ctrl+F` search history, `Ctrl+Enter` commit). Review changes in a file tree, stage/unstage (or all), discard tracked edits, read structured diffs (unified or side-by-side, line numbers, hide whitespace), and commit — with amend. Binary files aren't a dead end: image diffs preview both sides (PNG/JPEG/GIF/WebP/BMP/ICO/AVIF up to 4 MB per side) side-by-side, as an onion-skin overlay, or as a canvas pixel diff with the changed-pixel count, while any other binary still reports format, dimensions and byte delta. Switch, create, rename, delete and merge/rebase branches from the branch selector, and follow the commit graph with branch/tag labels and distinct merge nodes. History is searchable by message/author; right-click a commit to copy its SHA, revert, cherry-pick, or soft/mixed reset, and right-click a file to open it or view its history. Fetch / pull / push live in the top bar (credentials via Git Credential Manager; no force-push), and the commit box offers Commit & Push. Project rows keep a status chip that jumps here.
 
@@ -132,12 +130,12 @@ python -m uvicorn main:app --reload
 ```
 
 - Item `id` is optional; DevLaunch fills it in when reading.
-- A project that uses environments can carry an optional `worktree` section (root, `copy` allow-list, `portBase`, `portKey`). Per-machine state — port leases, favorites, recents, hotkey, git path — is never exported.
+- Experimental worktree policy is not applied by this release.
 - Importing a `devlaunch.json` means trusting the commands inside it (config as code). Only import files you trust.
 
 ### Let an AI write it for you
 
-DevLaunch is offline and has no built-in AI: any coding agent or chat AI can write `devlaunch.json` directly. Paste this prompt together with your project:
+DevLaunch has no background network access, telemetry, or built-in AI. It connects only when you explicitly trigger Git Fetch / Pull / Push, using your existing Git Credential Manager. Any coding agent or chat AI can write `devlaunch.json` directly; paste this prompt together with your project:
 
 ```text
 Read this project's package.json / pyproject.toml / Cargo.toml / go.mod and generate a devlaunch.json for me.

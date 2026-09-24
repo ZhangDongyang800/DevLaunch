@@ -1,6 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Project } from './types'
-import { filterProjects, itemLabel, relTime, sortProjects } from './utils'
+import {
+  canLeaveView,
+  classifyGitStatusError,
+  filterProjects,
+  isCurrentAsyncResult,
+  isUncertainGitWriteError,
+  itemLabel,
+  markUncertainGitWriteError,
+  moveIndex,
+  positionContextMenu,
+  relTime,
+  sortProjects,
+  waitForPending,
+} from './utils'
 
 function project(over: Partial<Project> = {}): Project {
   return { id: 'p1', name: 'App', rootDir: 'D:\\App', favorite: false, items: [], ...over }
@@ -66,6 +79,111 @@ describe('itemLabel', () => {
     expect(itemLabel({ name: '   ', command: 'cargo run' })).toBe('cargo')
     expect(itemLabel({ name: '', command: '' })).toBe('未命名')
     expect(itemLabel({ name: '  ', command: '   ' })).toBe('未命名')
+  })
+})
+
+describe('moveIndex', () => {
+  it('在列表边界循环', () => {
+    expect(moveIndex(0, -1, 3)).toBe(2)
+    expect(moveIndex(2, 1, 3)).toBe(0)
+  })
+
+  it('空列表返回 0', () => {
+    expect(moveIndex(4, 1, 0)).toBe(0)
+  })
+})
+
+describe('canLeaveView', () => {
+  it('编辑器离页保存失败时阻止导航', async () => {
+    const leave = vi.fn().mockResolvedValue(false)
+    await expect(canLeaveView({ name: 'editor', projectId: 'p1' }, { name: 'home' }, leave)).resolves.toBe(false)
+    expect(leave).toHaveBeenCalledOnce()
+  })
+
+  it('编辑器离页保存成功后允许导航', async () => {
+    const leave = vi.fn().mockResolvedValue(true)
+    await expect(canLeaveView({ name: 'editor', projectId: 'p1' }, { name: 'settings' }, leave)).resolves.toBe(true)
+  })
+
+  it('非编辑页直接允许导航', async () => {
+    const leave = vi.fn().mockResolvedValue(false)
+    await expect(canLeaveView({ name: 'home' }, { name: 'settings' }, leave)).resolves.toBe(true)
+    expect(leave).not.toHaveBeenCalled()
+  })
+
+  it('项目已不存在且编辑器未挂载时允许离开', async () => {
+    await expect(canLeaveView({ name: 'editor', projectId: 'missing' }, { name: 'home' }, undefined, true)).resolves.toBe(true)
+  })
+
+  it('正常编辑器没有 leave 回调时仍阻止离开', async () => {
+    await expect(canLeaveView({ name: 'editor', projectId: 'p1' }, { name: 'home' })).resolves.toBe(false)
+  })
+})
+
+describe('git write uncertainty', () => {
+  it('识别后端标记的超限与超时错误', () => {
+    expect(isUncertainGitWriteError('git 输出超过 4 MB 上限，命令已强制终止')).toBe(true)
+    expect(isUncertainGitWriteError('git 执行超时（已强制结束 Git 进程）')).toBe(true)
+    expect(isUncertainGitWriteError('fatal: not a git repository')).toBe(false)
+  })
+
+  it('没有后端标记时补充不确定性文案并保留原文', () => {
+    const marked = markUncertainGitWriteError('git 执行超时（已强制结束 Git 进程）')
+    expect(String(marked)).toContain('git 执行超时（已强制结束 Git 进程）')
+    expect(String(marked)).toContain('结果可能已部分生效')
+    const ordinary = markUncertainGitWriteError('提交失败')
+    expect(String(ordinary)).toBe('提交失败')
+  })
+})
+
+describe('git status errors', () => {
+  it('区分缺 git 与根目录不可用', () => {
+    expect(classifyGitStatusError('未找到 git.exe；请在设置中指定路径').kind).toBe('git')
+    expect(classifyGitStatusError('目录不存在：D:\\gone').kind).toBe('root')
+    expect(classifyGitStatusError('项目未设置根目录').kind).toBe('root')
+    expect(classifyGitStatusError('').kind).toBe('none')
+  })
+})
+
+describe('context menu positioning', () => {
+  it('靠近右下角时翻转并夹紧到视口内', () => {
+    const got = positionContextMenu(
+      { x: 780, y: 570 },
+      { left: 700, top: 500, right: 860, bottom: 540 },
+      { width: 200, height: 120 },
+      { width: 800, height: 600 },
+    )
+    expect(got).toEqual({ x: 592, y: 380 })
+  })
+
+  it('空间足够时保留请求位置', () => {
+    const got = positionContextMenu(
+      { x: 120, y: 140 },
+      { left: 100, top: 100, right: 300, bottom: 120 },
+      { width: 200, height: 120 },
+      { width: 800, height: 600 },
+    )
+    expect(got).toEqual({ x: 120, y: 140 })
+  })
+})
+
+describe('async view guards', () => {
+  it('只接受当前且仍存活的请求代次', () => {
+    expect(isCurrentAsyncResult(2, 2, true)).toBe(true)
+    expect(isCurrentAsyncResult(1, 2, true)).toBe(false)
+    expect(isCurrentAsyncResult(2, 2, false)).toBe(false)
+  })
+
+  it('导航等待待完成的异步操作', async () => {
+    let resolve!: () => void
+    const pending = new Promise<void>((done) => { resolve = done })
+    let settled = false
+    const waiting = waitForPending(pending).then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    resolve()
+    await waiting
+    expect(settled).toBe(true)
   })
 })
 

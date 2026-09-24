@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { RepoStatus } from '../types'
+import { classifyGitStatusError } from '../utils'
 
 const props = defineProps<{ status?: RepoStatus }>()
 const emit = defineEmits<{ open: [] }>()
@@ -9,6 +10,8 @@ const dirty = computed(() => {
   const s = props.status
   return s ? s.staged + s.unstaged + s.untracked : 0
 })
+
+const errorInfo = computed(() => classifyGitStatusError(props.status?.error))
 
 const dirtyTitle = computed(() => {
   const s = props.status
@@ -33,5 +36,12 @@ const dirtyTitle = computed(() => {
     <span v-if="status.ahead" class="gb-ahead">↑{{ status.ahead }}</span>
     <span v-if="status.behind" class="gb-behind">↓{{ status.behind }}</span>
   </button>
-  <span v-else-if="status && status.error" class="gb-warn" :title="status.error">—</span>
+  <span
+    v-else-if="status && status.error"
+    class="gb-warn"
+    :class="{ 'gb-git': errorInfo.kind === 'git', 'gb-root': errorInfo.kind === 'root' }"
+    :title="status.error"
+  >
+    {{ errorInfo.kind === 'root' ? '根目录不可用' : errorInfo.kind === 'git' ? 'Git 未找到' : '—' }}
+  </span>
 </template>

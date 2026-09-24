@@ -1,9 +1,11 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   AppConfig,
+  AppInfo,
   BinaryPreview,
   BranchInfo,
   CommitDetail,
+  ConfigStatus,
   DetectResult,
   DetectedProject,
   FileDiff,
@@ -19,6 +21,8 @@ import type {
 } from './types'
 
 export const getConfig = () => invoke<AppConfig>('get_config')
+export const getConfigStatus = () => invoke<ConfigStatus>('get_config_status')
+export const getAppInfo = () => invoke<AppInfo>('get_app_info')
 export const saveConfig = (config: AppConfig) => invoke<void>('save_config', { config })
 export const launchProject = (projectId: string) => invoke<void>('launch_project_cmd', { projectId })
 export const launchItem = (projectId: string, itemId: string) =>

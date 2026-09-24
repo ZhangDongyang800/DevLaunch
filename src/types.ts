@@ -3,7 +3,6 @@ export type View =
   | { name: 'editor'; projectId: string }
   | { name: 'scan' }
   | { name: 'git'; projectId?: string }
-  | { name: 'env'; projectId?: string }
   | { name: 'settings' }
 
 export type Shell = 'cmd' | 'powershell' | 'bash'
@@ -47,6 +46,16 @@ export interface AppConfig {
   version: number
   settings: Settings
   projects: Project[]
+}
+
+export interface ConfigStatus {
+  blocked: boolean
+  reason: string | null
+  path: string
+}
+
+export interface AppInfo {
+  version: string
 }
 
 export interface ProjectTemplate {

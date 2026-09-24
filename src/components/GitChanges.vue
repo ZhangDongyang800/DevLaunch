@@ -151,30 +151,34 @@ function statusLetter(f: FileChange): string {
         </div>
         <div class="fs-body">
           <template v-for="row in stagedRows" :key="'s' + row.path">
-            <div
+            <button
               v-if="row.isDir"
+              type="button"
               class="tree-dir"
               :style="{ paddingLeft: 8 + row.indent * 14 + 'px' }"
+              :aria-expanded="!collapsedStaged.has(row.path)"
               @click="collapsedStaged = toggleCollapse(collapsedStaged, row.path)"
             >
               {{ collapsedStaged.has(row.path) ? '▸' : '▾' }} {{ row.name }}
-            </div>
+            </button>
             <div
               v-else
               class="file-row"
               :class="{ active: selPath === row.path && selStaged }"
               :style="{ paddingLeft: 8 + row.indent * 14 + 'px' }"
-              @click="openFile(row.path, true)"
             >
               <input
                 type="checkbox"
                 checked
                 :key="'scb' + row.path + rev"
                 :disabled="busy"
+                :aria-label="`取消暂存 ${row.path}`"
                 @click.stop="action(() => unstage(projectId, [row.path]))"
               />
               <span class="file-status mono">{{ fileMap.get(row.path) ? statusLetter(fileMap.get(row.path)!) : 'M' }}</span>
-              <span class="file-name mono">{{ row.name }}</span>
+              <button type="button" class="file-name file-open mono" @click="openFile(row.path, true)">
+                {{ row.name }}
+              </button>
             </div>
           </template>
           <div v-if="stagedFiles.length === 0" class="gc-empty">无已暂存改动</div>
@@ -195,29 +199,33 @@ function statusLetter(f: FileChange): string {
         </div>
         <div class="fs-body">
           <template v-for="row in unstagedRows" :key="'w' + row.path">
-            <div
+            <button
               v-if="row.isDir"
+              type="button"
               class="tree-dir"
               :style="{ paddingLeft: 8 + row.indent * 14 + 'px' }"
+              :aria-expanded="!collapsedUnstaged.has(row.path)"
               @click="collapsedUnstaged = toggleCollapse(collapsedUnstaged, row.path)"
             >
               {{ collapsedUnstaged.has(row.path) ? '▸' : '▾' }} {{ row.name }}
-            </div>
+            </button>
             <div
               v-else
               class="file-row"
               :class="{ active: selPath === row.path && !selStaged }"
               :style="{ paddingLeft: 8 + row.indent * 14 + 'px' }"
-              @click="openFile(row.path, false)"
             >
               <input
                 type="checkbox"
                 :key="'ucb' + row.path + rev"
                 :disabled="busy"
+                :aria-label="`暂存 ${row.path}`"
                 @click.stop="action(() => stage(projectId, [row.path]))"
               />
               <span class="file-status mono">{{ fileMap.get(row.path) ? statusLetter(fileMap.get(row.path)!) : '?' }}</span>
-              <span class="file-name mono">{{ row.name }}</span>
+              <button type="button" class="file-name file-open mono" @click="openFile(row.path, false)">
+                {{ row.name }}
+              </button>
               <button
                 v-if="fileMap.get(row.path) && fileMap.get(row.path)!.index !== '?'"
                 class="ghost file-discard"

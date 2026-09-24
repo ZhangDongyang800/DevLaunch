@@ -65,6 +65,13 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_future_config_version() {
+        let cfg = AppConfig { version: crate::config::CONFIG_VERSION + 1, ..Default::default() };
+        let err = validate_config(&cfg).unwrap_err();
+        assert!(err.contains("版本"), "{err}");
+    }
+
+    #[test]
     fn apply_config_rolls_back_memory_on_save_failure() {
         let dir = tempfile::tempdir().unwrap();
         let blocker = dir.path().join("blocker");
@@ -104,6 +111,26 @@ mod tests {
         assert!(ensure_config_writable(&state).is_err());
         // 磁盘上的用户配置一字未动
         assert!(fs::read_to_string(&path).unwrap().contains("真实项目"));
+    }
+
+    #[test]
+    fn config_status_reports_path_and_blocked_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let state = test_state(AppConfig::default(), path.clone());
+        *state.config_read_blocked.lock().unwrap() = Some("文件被占用".into());
+
+        let status = config_status(&state);
+
+        assert!(status.blocked);
+        assert_eq!(status.reason.as_deref(), Some("文件被占用"));
+        assert_eq!(status.path, path.to_string_lossy());
+    }
+
+    #[test]
+    fn app_info_reports_package_version() {
+        let info = get_app_info();
+        assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
@@ -299,6 +326,41 @@ pub fn get_config(state: State<AppState>) -> AppConfig {
     state.config.lock().unwrap().clone()
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigStatus {
+    pub blocked: bool,
+    pub reason: Option<String>,
+    pub path: String,
+}
+
+fn config_status(state: &AppState) -> ConfigStatus {
+    let reason = match state.config_read_blocked.lock() {
+        Ok(blocked) => blocked.clone(),
+        Err(_) => Some("配置状态不可用".to_string()),
+    };
+    ConfigStatus {
+        blocked: reason.is_some(),
+        reason,
+        path: state.path.to_string_lossy().into_owned(),
+    }
+}
+
+#[tauri::command]
+pub fn get_config_status(state: State<AppState>) -> ConfigStatus {
+    config_status(&state)
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct AppInfo {
+    pub version: String,
+}
+
+#[tauri::command]
+pub fn get_app_info() -> AppInfo {
+    AppInfo { version: env!("CARGO_PKG_VERSION").to_string() }
+}
+
 /// `leases` 是**后端权威**字段，前端只负责编辑政策（root / copy / portBase / portKey）。
 ///
 /// 租约由 Rust 在新建/删除环境时写入。前端 `persist()` 发来的是它加载配置那一刻
@@ -429,6 +491,13 @@ pub fn set_hotkey(app: AppHandle, state: State<AppState>, hotkey: String) -> Res
 }
 
 pub fn validate_config(cfg: &AppConfig) -> Result<(), String> {
+    if cfg.version != crate::config::CONFIG_VERSION {
+        return Err(format!(
+            "配置版本无效：期望 v{}，收到 v{}",
+            crate::config::CONFIG_VERSION,
+            cfg.version
+        ));
+    }
     let mut project_ids = HashSet::new();
     for project in &cfg.projects {
         if project.id.trim().is_empty() {
@@ -1140,10 +1209,7 @@ pub fn open_file(state: State<'_, AppState>, project_id: String, path: String) -
     repo_relative(&path)?;
     let cfg = state.config.lock().unwrap().clone();
     let dir = project_dir(&cfg, &project_id)?;
-    let p = dir.join(&path);
-    if !p.is_file() {
-        return Err(format!("文件不存在：{}", p.display()));
-    }
+    let p = git::repo_file_for_read(&dir, &path)?;
     #[cfg(windows)]
     {
         std::process::Command::new("explorer").arg(&p).spawn().map_err(|e| e.to_string())?;

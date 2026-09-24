@@ -283,14 +283,36 @@ pub(crate) fn run_git_with_opts(
 ) -> Result<String, String> {
     let raw = spawn_git(program, dir, args, opts)?;
     // 写操作被强杀后可能留下 index.lock，不清会导致后续所有写一直失败。
-    let note = raw
-        .timed_out
+    let note = (raw.timed_out || raw.capped)
         .then(|| cleanup_killed_index_lock(program, dir, raw.started_at))
         .flatten();
-    raw.into_result(note)
+    raw.into_write_result(note)
 }
 
 impl GitRaw {
+    fn into_write_result(self, note: Option<String>) -> Result<String, String> {
+        if self.capped {
+            let mut msg = format!(
+                "git 输出超过 {} MB 上限，命令已强制终止；命令结果可能已部分生效",
+                MAX_OUTPUT_BYTES / 1024 / 1024
+            );
+            if let Some(note) = note {
+                msg.push('；');
+                msg.push_str(&note);
+            }
+            return Err(msg);
+        }
+        if self.timed_out {
+            let mut msg = "git 执行超时（已强制结束 Git 进程）；命令结果可能已部分生效".to_string();
+            if let Some(note) = note {
+                msg.push('；');
+                msg.push_str(&note);
+            }
+            return Err(msg);
+        }
+        self.into_result(note)
+    }
+
     fn into_result(self, note: Option<String>) -> Result<String, String> {
         let stderr = String::from_utf8_lossy(&self.err).into_owned();
         // git 把「no changes added to commit」这类结论写在 stdout，此时 stderr 里
@@ -935,22 +957,59 @@ fn looks_binary(bytes: &[u8]) -> bool {
     bytes.iter().take(8000).any(|&b| b == 0)
 }
 
+fn read_file_limited(path: &Path, limit: usize) -> Result<(Vec<u8>, bool), String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("读取文件失败：{e}"))?;
+    let mut reader = file.take(limit.saturating_add(1) as u64);
+    let mut bytes = Vec::with_capacity(limit.min(64 * 1024));
+    reader.read_to_end(&mut bytes).map_err(|e| format!("读取文件失败：{e}"))?;
+    let truncated = bytes.len() > limit;
+    bytes.truncate(limit);
+    Ok((bytes, truncated))
+}
+
+pub(crate) fn repo_file_for_read(dir: &Path, path: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(path);
+    if relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::Prefix(_)
+                    | std::path::Component::RootDir
+            )
+        })
+    {
+        return Err(format!("非法文件路径：{path}"));
+    }
+    let root = std::fs::canonicalize(dir).map_err(|e| format!("解析仓库目录失败：{e}"))?;
+    let target = std::fs::canonicalize(dir.join(relative)).map_err(|e| format!("解析仓库文件失败：{e}"))?;
+    if !target.starts_with(&root) {
+        return Err(format!("文件指向仓库外，已拒绝读取：{path}"));
+    }
+    if !std::fs::metadata(&target).map_err(|e| format!("读取文件属性失败：{e}"))?.is_file() {
+        return Err(format!("不是文件：{path}"));
+    }
+    Ok(target)
+}
+
 /// 未跟踪文件的“diff”= 整文件视为新增（内容预览，≤256KB）。二进制内容不做 lossy 文本渲染。
-pub fn untracked_file_diff(path: &str, abs: &Path) -> Result<FileDiff, String> {
-    let bytes = std::fs::read(abs).map_err(|e| format!("读取文件失败：{e}"))?;
+pub fn untracked_file_diff(dir: &Path, path: &str) -> Result<FileDiff, String> {
+    let abs = repo_file_for_read(dir, path)?;
+    let (bytes, oversized) = read_file_limited(&abs, MAX_PATCH_BYTES)?;
     if looks_binary(&bytes) {
         return Ok(FileDiff {
             path: path.to_string(),
             staged: false,
             untracked: true,
             binary: true,
-            truncated: false,
+            truncated: oversized,
             additions: 0,
             deletions: 0,
             hunks: Vec::new(),
         });
     }
-    let (text, truncated) = truncate_patch(String::from_utf8_lossy(&bytes).into_owned());
+    let (text, truncated_text) = truncate_patch(String::from_utf8_lossy(&bytes).into_owned());
+    let truncated = oversized || truncated_text;
     let total = text.split('\n').count();
     let mut lines = Vec::new();
     let mut n = 0u32;
@@ -993,7 +1052,7 @@ pub fn file_diff(
     // 已跟踪判定：ls-files --error-unmatch 对未跟踪文件返回非零。
     let tracked = run_git(dir, &["ls-files", "--error-unmatch", "--", path]).is_ok();
     if !tracked {
-        return untracked_file_diff(path, &dir.join(path));
+        return untracked_file_diff(dir, path);
     }
     let mut args = vec!["diff"];
     if staged {
@@ -1288,9 +1347,21 @@ fn read_object_side(dir: &Path, specs: &[String], limit: u64, fetch: bool) -> Op
 }
 
 fn read_worktree_side(dir: &Path, path: &str, limit: u64, fetch: bool) -> Option<BlobSide> {
-    let abs = dir.join(path);
-    let size = std::fs::metadata(&abs).ok()?.len();
-    let bytes = if fetch && size <= limit { std::fs::read(&abs).ok() } else { None };
+    let abs = repo_file_for_read(dir, path).ok()?;
+    let mut size = std::fs::metadata(&abs).ok()?.len();
+    let bytes = if fetch && size <= limit {
+        let byte_limit = usize::try_from(limit).ok()?;
+        match read_file_limited(&abs, byte_limit) {
+            Ok((bytes, false)) => Some(bytes),
+            Ok((_, true)) => {
+                size = size.max(limit.saturating_add(1));
+                None
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
     Some(make_side(size, limit, bytes))
 }
 
@@ -1622,7 +1693,7 @@ mod tests {
 
     /// 撞上 4MB 输出上限必须**如实上报**，而不是把残缺数据当完整结果用。
     #[test]
-    fn run_git_capped_flags_output_over_the_limit() {
+    fn run_git_capped_distinguishes_read_and_write_output_limits() {
         let Some(program) = resolve_git_path() else { return };
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
@@ -1650,6 +1721,37 @@ mod tests {
         let big = run_git_capped(&program, p, &["log", "--format=%B"]).unwrap();
         assert!(big.capped, "5MB 输出必须被标记为截断");
         assert!(big.text.len() as u64 <= MAX_OUTPUT_BYTES);
+
+        let err = run_git_with_opts(&program, p, &["log", "--format=%B"], GitRunOpts::default()).unwrap_err();
+        assert!(err.contains("输出超过") && err.contains("已强制终止"), "{err}");
+    }
+
+    #[test]
+    fn write_limit_and_timeout_errors_mark_result_uncertain() {
+        let now = std::time::SystemTime::now();
+        let capped = GitRaw {
+            out: vec![b'x'; 8],
+            err: Vec::new(),
+            capped: true,
+            exit_ok: false,
+            timed_out: false,
+            started_at: now,
+        }
+        .into_write_result(None)
+        .unwrap_err();
+        assert!(capped.contains("结果可能已部分生效"), "{capped}");
+
+        let timed_out = GitRaw {
+            out: Vec::new(),
+            err: Vec::new(),
+            capped: false,
+            exit_ok: false,
+            timed_out: true,
+            started_at: now,
+        }
+        .into_write_result(None)
+        .unwrap_err();
+        assert!(timed_out.contains("结果可能已部分生效"), "{timed_out}");
     }
 
     fn png_header(w: u32, h: u32) -> Vec<u8> {
@@ -1954,13 +2056,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("blob.dat");
         std::fs::write(&bin, b"ab\x00cd").unwrap();
-        let f = untracked_file_diff("blob.dat", &bin).unwrap();
+        let f = untracked_file_diff(dir.path(), "blob.dat").unwrap();
         assert!(f.binary, "含 NUL 的未跟踪文件不该按文本渲染");
         assert!(f.hunks.is_empty());
 
         let txt = dir.path().join("note.txt");
         std::fs::write(&txt, "line1\nline2").unwrap();
-        let f = untracked_file_diff("note.txt", &txt).unwrap();
+        let f = untracked_file_diff(dir.path(), "note.txt").unwrap();
         assert!(!f.binary);
         assert_eq!(f.hunks[0].lines.len(), 2);
     }
@@ -2181,13 +2283,57 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("new.txt");
         std::fs::write(&f, "alpha\nbeta\n").unwrap();
-        let got = untracked_file_diff("new.txt", &f).unwrap();
+        let got = untracked_file_diff(dir.path(), "new.txt").unwrap();
         assert!(got.untracked);
         assert_eq!(got.additions, 2);
         assert_eq!(got.deletions, 0);
         assert_eq!(got.hunks.len(), 1);
         assert_eq!(got.hunks[0].lines[0].kind, "add");
         assert_eq!(got.hunks[0].lines[0].new_no, Some(1));
+    }
+
+    #[test]
+    fn bounded_file_read_stops_at_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("large.bin");
+        std::fs::write(&file, vec![b'x'; 4096]).unwrap();
+        let (bytes, truncated) = read_file_limited(&file, 1024).unwrap();
+        assert_eq!(bytes.len(), 1024);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn repo_file_rejects_parent_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = repo_file_for_read(dir.path(), "../outside.txt").unwrap_err();
+        assert!(err.contains("非法文件路径"), "{err}");
+    }
+
+    #[test]
+    fn repo_file_accepts_file_inside_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        let file = root.join("inside.txt");
+        std::fs::write(&file, "ok").unwrap();
+        assert_eq!(repo_file_for_read(&root, "inside.txt").unwrap(), std::fs::canonicalize(file).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn repo_file_rejects_symlink_outside_root() {
+        use std::os::windows::fs::symlink_file;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        let outside = dir.path().join("outside.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        if symlink_file(&outside, root.join("link.txt")).is_err() {
+            return;
+        }
+        let err = repo_file_for_read(&root, "link.txt").unwrap_err();
+        assert!(err.contains("仓库外"), "{err}");
     }
 
     #[test]

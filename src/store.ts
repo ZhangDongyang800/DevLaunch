@@ -1,8 +1,9 @@
 import { ref, type Ref } from 'vue'
-import type { AppConfig } from './types'
-import { getConfig, saveConfig } from './api'
+import type { AppConfig, ConfigStatus } from './types'
+import { getConfig, getConfigStatus, saveConfig } from './api'
 
 export const config: Ref<AppConfig | null> = ref(null)
+export const configStatus: Ref<ConfigStatus> = ref({ blocked: false, reason: null, path: '' })
 
 // 主题 = 一组 token 覆盖块（见 style.css 的 [data-theme]），只改配色不改布局。
 export const THEMES = ['signal', 'graphite', 'indigo', 'amber'] as const
@@ -21,7 +22,9 @@ export function applyTheme(name: string | null | undefined): void {
 }
 
 export async function load(): Promise<void> {
-  config.value = await getConfig()
+  const [loaded, status] = await Promise.all([getConfig(), getConfigStatus()])
+  config.value = loaded
+  configStatus.value = status
   applyTheme(config.value?.settings.theme)
 }
 

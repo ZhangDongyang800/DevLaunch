@@ -3,8 +3,9 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { config, persist } from '../store'
 import { newId, type Project } from '../types'
 import { getConfig, launchProject, openDir } from '../api'
-import { filterProjects, itemLabel, sortProjects } from '../utils'
+import { classifyGitStatusError, filterProjects, itemLabel, sortProjects } from '../utils'
 import GitBadge from '../components/GitBadge.vue'
+import LaunchMark from '../components/LaunchMark.vue'
 import { gitError, refreshStatuses, statuses } from '../gitStore'
 
 const emit = defineEmits<{
@@ -97,10 +98,10 @@ function createProject() {
 <template>
   <div class="home">
     <div class="page-head">
-      <h1>启动台</h1>
-      <span class="page-meta">{{ projects.length }} PROJECTS</span>
+      <h1>项目</h1>
+      <span class="page-meta">{{ projects.length }} 个项目</span>
       <span class="toolbar">
-        <input v-model="query" class="inline filter-input mono" placeholder="过滤项目…" spellcheck="false" />
+        <input v-model="query" class="inline filter-input mono" placeholder="过滤项目…" aria-label="过滤项目" spellcheck="false" />
         <button class="bordered" @click="emit('scan')">扫描工作区</button>
         <button class="bordered" @click="createProject">+ 新建项目</button>
       </span>
@@ -122,41 +123,78 @@ function createProject() {
 
     <div v-else class="list">
       <template v-for="p in visibleProjects" :key="p.id">
-        <div
-          class="project-row"
-          role="button"
-          tabindex="0"
-          title="点击启动"
-          @click="launch(p.id)"
-          @keydown.enter.self="launch(p.id)"
-        >
-          <button class="launch-btn" title="启动" :disabled="launchingId === p.id" @click.stop="launch(p.id)">▶</button>
+        <div class="project-row">
+          <button
+            class="launch-btn"
+            :aria-label="`启动 ${p.name || '未命名项目'}`"
+            title="启动项目"
+            :disabled="launchingId === p.id"
+            @click.stop="launch(p.id)"
+          >
+            <LaunchMark :size="16" />
+          </button>
 
-          <div class="pc-info">
-            <div class="pc-head">
+          <button class="pc-info" type="button" title="启动项目" @click="launch(p.id)">
+            <span class="pc-head">
               <span class="pc-name">{{ p.name || '未命名项目' }}</span>
               <span class="pc-path mono">{{ p.rootDir || '未设置根目录' }}</span>
-            </div>
-            <div class="pc-pipeline">
+            </span>
+            <span class="pc-pipeline">
               <template v-for="(it, i) in p.items" :key="it.id">
                 <span v-if="i > 0" class="pl-sep">·</span>
                 <span class="pl-cmd" :title="it.command">{{ itemLabel(it) }}</span>
               </template>
               <span v-if="p.items.length === 0" class="pl-empty">无启动项</span>
-            </div>
-          </div>
+            </span>
+          </button>
+
+          <span
+            v-if="statuses[p.id]?.error"
+            class="project-warning"
+            :class="`project-warning-${classifyGitStatusError(statuses[p.id]?.error).kind}`"
+            :title="statuses[p.id]?.error ?? undefined"
+          >
+            {{ classifyGitStatusError(statuses[p.id]?.error).label }}
+          </span>
 
           <GitBadge :status="statuses[p.id]" @open="emit('open-git', p.id)" />
 
           <div class="pc-side">
-            <button class="ghost star" :class="{ on: p.favorite }" title="收藏置顶" @click.stop="toggleFavorite(p)">
+            <button
+              v-if="classifyGitStatusError(statuses[p.id]?.error).kind === 'root'"
+              class="ghost project-fix"
+              :aria-label="`编辑 ${p.name || '未命名项目'} 的根目录`"
+              @click.stop="emit('edit', p.id)"
+            >
+              编辑根目录
+            </button>
+            <button
+              class="ghost star"
+              :class="{ on: p.favorite }"
+              :aria-label="`${p.favorite ? '取消收藏' : '收藏'} ${p.name || '未命名项目'}`"
+              title="收藏置顶"
+              @click.stop="toggleFavorite(p)"
+            >
               {{ p.favorite ? '★' : '☆' }}
             </button>
-            <button class="ghost" @click.stop="open(p.rootDir)">目录</button>
-            <button class="ghost" @click.stop="emit('edit', p.id)">编辑</button>
+            <button
+              class="ghost"
+              :aria-label="`打开 ${p.name || '未命名项目'} 目录`"
+              @click.stop="open(p.rootDir)"
+            >
+              目录
+            </button>
+            <button
+              class="ghost"
+              :aria-label="`编辑 ${p.name || '未命名项目'}`"
+              @click.stop="emit('edit', p.id)"
+            >
+              编辑
+            </button>
             <button
               class="danger ghost"
               :class="{ confirming: confirmDeleteId === p.id }"
+              :aria-label="`${confirmDeleteId === p.id ? '确认删除' : '删除'} ${p.name || '未命名项目'}`"
               @click.stop="removeProject(p.id)"
             >
               {{ confirmDeleteId === p.id ? '确认删除？' : '删除' }}

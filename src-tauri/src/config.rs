@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde::de::Error as _;
 use std::collections::HashSet;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -160,6 +161,7 @@ impl Default for AppConfig {
 
 pub struct LoadedConfig {
     pub config: AppConfig,
+    pub first_run: bool,
     /// 磁盘内容损坏时，原件被备份到的路径。
     pub corrupt_backup: Option<PathBuf>,
     /// 磁盘内容损坏时，成功从哪个备份恢复；None = 没有可用备份（回退默认值）。
@@ -185,7 +187,20 @@ enum ReadOutcome {
 /// 连前端那个"配置加载失败 + 重试"的空态都到不了。
 pub const MAX_JSON_BYTES: u64 = 8 * 1024 * 1024;
 
-/// 带大小上限的文本读取（配置、模板、导入文件统一走这里）。
+fn read_bytes_limited(path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)> {
+    let file = fs::File::open(path)?;
+    let mut reader = file.take(limit.saturating_add(1));
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    let truncated = bytes.len() as u64 > limit;
+    if truncated {
+        let bounded_len = usize::try_from(limit)
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "读取上限超出 usize"))?;
+        bytes.truncate(bounded_len);
+    }
+    Ok((bytes, truncated))
+}
+
 pub fn read_text_limited(path: &Path) -> Result<String, String> {
     let meta = fs::metadata(path).map_err(|e| format!("读取失败：{e}"))?;
     if !meta.is_file() {
@@ -198,14 +213,18 @@ pub fn read_text_limited(path: &Path) -> Result<String, String> {
             MAX_JSON_BYTES / (1024 * 1024)
         ));
     }
-    fs::read_to_string(path).map_err(|e| format!("读取失败：{e}"))
+    let (bytes, truncated) = read_bytes_limited(path, MAX_JSON_BYTES)
+        .map_err(|e| format!("读取失败：{e}"))?;
+    if truncated {
+        return Err(format!("文件超过 {} MB 上限", MAX_JSON_BYTES / (1024 * 1024)));
+    }
+    String::from_utf8(bytes).map_err(|e| format!("文件不是有效 UTF-8：{e}"))
 }
 
 /// 一次性的瞬时失败重试：Windows 上杀软/索引器短暂占用很常见。
 fn read_config_file(path: &Path) -> ReadOutcome {
     let mut last = String::new();
     for attempt in 0..3 {
-        // 过大文件不能当"读不出来"以外的任何东西，更不能直接读进内存。
         if let Ok(meta) = fs::metadata(path) {
             if meta.is_file() && meta.len() > MAX_JSON_BYTES {
                 return ReadOutcome::Failed(format!(
@@ -214,10 +233,20 @@ fn read_config_file(path: &Path) -> ReadOutcome {
                 ));
             }
         }
-        match fs::read_to_string(path) {
-            Ok(text) => return ReadOutcome::Text(text),
+        match read_bytes_limited(path, MAX_JSON_BYTES) {
+            Ok((_bytes, true)) => {
+                return ReadOutcome::Failed(format!(
+                    "配置文件超过 {} MB 上限",
+                    MAX_JSON_BYTES / (1024 * 1024)
+                ));
+            }
+            Ok((bytes, false)) => {
+                return match String::from_utf8(bytes) {
+                    Ok(text) => ReadOutcome::Text(text),
+                    Err(e) => ReadOutcome::Failed(format!("配置文件不是有效 UTF-8：{e}")),
+                };
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // 目录项在也可能报 NotFound（例如目标是目录），所以再确认一次存在性。
                 return if fs::symlink_metadata(path).is_ok() {
                     ReadOutcome::Failed(format!("{e}"))
                 } else {
@@ -272,12 +301,13 @@ impl AppConfig {
         sweep_stale_temps(path);
         let fallback = LoadedConfig {
             config: AppConfig::new(),
+            first_run: false,
             corrupt_backup: None,
             restored_from: None,
             blocked: None,
         };
         match read_config_file(path) {
-            ReadOutcome::Absent => fallback,
+            ReadOutcome::Absent => LoadedConfig { first_run: true, ..fallback },
             ReadOutcome::Failed(e) => {
                 crate::diag::error(format!("配置读取失败：{e}；拒绝在其上写入"));
                 LoadedConfig { blocked: Some(e), ..fallback }
@@ -286,15 +316,40 @@ impl AppConfig {
                 Ok(config) => LoadedConfig { config, ..fallback },
                 Err(e) => {
                     crate::diag::error(format!("配置解析失败：{e}；备份并尝试恢复"));
-                    let corrupt_backup = backup_corrupt(path).ok();
+                    let corrupt_backup = match backup_corrupt(path) {
+                        Ok(backup) => backup,
+                        Err(backup_error) => {
+                            let reason = format!("配置损坏且无法备份原件：{backup_error}");
+                            crate::diag::error(format!("{reason}；拒绝写入"));
+                            return LoadedConfig { blocked: Some(reason), ..fallback };
+                        }
+                    };
                     match newest_readable_backup(path) {
-                        Some((config, from)) => LoadedConfig {
-                            config,
-                            restored_from: Some(from),
-                            corrupt_backup,
-                            blocked: None,
+                        Some((config, from)) => match save_json(&config, path) {
+                            Ok(()) => LoadedConfig {
+                                config,
+                                first_run: false,
+                                restored_from: Some(from),
+                                corrupt_backup: Some(corrupt_backup),
+                                blocked: None,
+                            },
+                            Err(save_error) => {
+                                let reason = format!(
+                                    "已从备份 {} 恢复配置，但写回 {} 失败：{save_error}",
+                                    from.display(),
+                                    path.display()
+                                );
+                                crate::diag::error(format!("{reason}；拒绝写入"));
+                                LoadedConfig {
+                                    config,
+                                    first_run: false,
+                                    restored_from: Some(from),
+                                    corrupt_backup: Some(corrupt_backup),
+                                    blocked: Some(reason),
+                                }
+                            }
                         },
-                        None => LoadedConfig { corrupt_backup, ..fallback },
+                        None => LoadedConfig { corrupt_backup: Some(corrupt_backup), ..fallback },
                     }
                 }
             },
@@ -302,9 +357,8 @@ impl AppConfig {
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        // 原子替换之前先留一份滚动备份：损坏/误写时才有东西可恢复。
         if path.is_file() {
-            let _ = fs::copy(path, backup_path_of(path));
+            fs::copy(path, backup_path_of(path)).map_err(|e| format!("备份现有配置失败：{e}"))?;
         }
         save_json(self, path)
     }
@@ -382,10 +436,24 @@ pub fn save_json<T: Serialize>(value: &T, path: &Path) -> Result<(), String> {
 }
 
 fn backup_corrupt(path: &Path) -> std::io::Result<PathBuf> {
-    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    let bak = path.with_extension(format!("json.corrupt-{ts}"));
-    fs::rename(path, &bak)?;
-    Ok(bak)
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    for attempt in 0..100u32 {
+        let suffix = if attempt == 0 {
+            ts.to_string()
+        } else {
+            format!("{ts}-{attempt}")
+        };
+        let bak = path.with_extension(format!("json.corrupt-{suffix}"));
+        match fs::copy(path, &bak) {
+            Ok(_) => return Ok(bak),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 99 => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "无法生成唯一的损坏配置备份路径",
+    ))
 }
 
 /// 版本探测后选择现代格式直接解析或 legacy 迁移（v1/v2）；无 version 但含 items 视为现代格式。
@@ -1061,10 +1129,20 @@ mod tests {
     fn load_missing_file_returns_default() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
-        let cfg = AppConfig::load(&path);
-        assert_eq!(cfg.version, CONFIG_VERSION);
-        assert!(!cfg.settings.autostart);
-        assert!(cfg.projects.is_empty());
+        let loaded = AppConfig::load_diagnostic(&path);
+        assert!(loaded.first_run);
+        assert_eq!(loaded.config.version, CONFIG_VERSION);
+        assert!(!loaded.config.settings.autostart);
+        assert!(loaded.config.projects.is_empty());
+    }
+
+    #[test]
+    fn existing_config_is_not_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        AppConfig::default().save(&path).unwrap();
+        let loaded = AppConfig::load_diagnostic(&path);
+        assert!(!loaded.first_run);
     }
 
     #[test]
@@ -1197,6 +1275,90 @@ mod tests {
         assert_eq!(loaded.blocked, None);
     }
 
+    #[test]
+    fn restored_config_is_persisted_for_next_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let backup = dir.path().join("config.json.bak");
+        fs::write(
+            &backup,
+            r#"{"version":8,"settings":{"autostart":false,"hotkey":"Ctrl+Alt+D"},"projects":[{"id":"p1","name":"持久恢复","rootDir":"D:\\x","items":[]}]}"#,
+        )
+        .unwrap();
+        fs::write(&path, "{ not valid json").unwrap();
+
+        let loaded = AppConfig::load_diagnostic(&path);
+        assert_eq!(loaded.config.projects[0].name, "持久恢复");
+        assert!(path.is_file(), "恢复结果必须立即写回主配置");
+
+        let reloaded = AppConfig::load_diagnostic(&path);
+        assert_eq!(reloaded.config.projects[0].name, "持久恢复");
+        assert!(reloaded.restored_from.is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_restore_write_keeps_original_and_retries_next_load() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let backup = dir.path().join("config.json.bak");
+        fs::write(
+            &backup,
+            r#"{"version":8,"settings":{"autostart":false,"hotkey":"Ctrl+Alt+D"},"projects":[{"id":"p1","name":"可重试恢复","rootDir":"D:\\x","items":[]}]}"#,
+        )
+        .unwrap();
+        fs::write(&path, "{ not valid json").unwrap();
+        let held = fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
+
+        let first = AppConfig::load_diagnostic(&path);
+        assert_eq!(first.config.projects[0].name, "可重试恢复");
+        assert!(first.restored_from.is_some());
+        assert!(first.blocked.as_deref().is_some_and(|reason| reason.contains("写回")));
+        assert!(path.is_file(), "写回失败时主配置不能被移走");
+
+        drop(held);
+        let second = AppConfig::load_diagnostic(&path);
+        assert_eq!(second.config.projects[0].name, "可重试恢复");
+        assert!(second.blocked.is_none(), "释放占用后应能再次恢复并写回");
+        assert!(path.is_file());
+    }
+
+    #[test]
+    fn corrupt_file_without_readable_backup_keeps_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        fs::write(&path, "{ not valid json").unwrap();
+
+        let loaded = AppConfig::load_diagnostic(&path);
+
+        assert!(loaded.corrupt_backup.is_some());
+        assert!(path.is_file());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{ not valid json");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rolling_backup_failure_aborts_save() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let original = r#"{"version":8,"settings":{"autostart":false,"hotkey":"Ctrl+Alt+D"},"projects":[]}"#;
+        fs::write(&path, original).unwrap();
+        let backup = backup_path_of(&path);
+        fs::write(&backup, "locked").unwrap();
+        let held = fs::OpenOptions::new().read(true).share_mode(1).open(&backup).unwrap();
+        let mut next = AppConfig::default();
+        next.settings.theme = "amber".into();
+
+        let err = next.save(&path).unwrap_err();
+        assert!(err.contains("备份"), "{err}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        drop(held);
+    }
+
     /// 损坏且没有任何可用备份时才回退默认值（并保持 corrupt_backup 上报）。
     #[test]
     fn corrupt_config_without_backup_falls_back_to_defaults() {
@@ -1233,6 +1395,18 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap().matches("第二版").count(), 1);
         let bak = backup_path_of(&path);
         assert!(fs::read_to_string(&bak).unwrap().contains("第一版"));
+    }
+
+    #[test]
+    fn bounded_text_reader_stops_at_the_requested_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.txt");
+        fs::write(&path, vec![b'x'; 17]).unwrap();
+
+        let (bytes, truncated) = read_bytes_limited(&path, 16).unwrap();
+
+        assert_eq!(bytes.len(), 16);
+        assert!(truncated);
     }
 
     #[test]

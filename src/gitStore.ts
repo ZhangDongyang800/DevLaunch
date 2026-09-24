@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { isUncertainGitWriteError, markUncertainGitWriteError } from './utils'
 import type { BranchInfo, GraphRow, PushResult, RepoStatus } from './types'
 import {
   gitBranches,
@@ -154,11 +155,23 @@ function beginBusy(): void {
   busy.value = true
 }
 
+async function rethrowWriteError(projectId: string, error: unknown): Promise<never> {
+  if (isUncertainGitWriteError(error)) {
+    try {
+      await refreshRepo(projectId)
+    } catch {
+    }
+  }
+  throw markUncertainGitWriteError(error)
+}
+
 async function runWrite(projectId: string, fn: () => Promise<unknown>): Promise<void> {
   beginBusy()
   try {
     await fn()
     await refreshRepo(projectId)
+  } catch (error) {
+    await rethrowWriteError(projectId, error)
   } finally {
     busy.value = false
   }
@@ -207,6 +220,8 @@ export async function pushRemote(projectId: string): Promise<PushResult> {
     const result = await gitPush(projectId)
     await refreshRepo(projectId)
     return result
+  } catch (error) {
+    return rethrowWriteError(projectId, error)
   } finally {
     busy.value = false
   }

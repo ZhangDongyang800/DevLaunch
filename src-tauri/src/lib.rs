@@ -37,6 +37,10 @@ fn toggle_palette(app: &AppHandle) {
     }
 }
 
+fn should_show_main_window(first_run: bool, debug: bool) -> bool {
+    first_run || debug
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -55,6 +59,7 @@ pub fn run() {
             diag::init(&dir.join("logs"));
             let path = dir.join("config.json");
             let loaded = AppConfig::load_diagnostic(&path);
+            let first_run = loaded.first_run;
             diag::info(format!(
                 "启动 v{} 配置={} 项目数={}",
                 env!("CARGO_PKG_VERSION"),
@@ -119,9 +124,10 @@ pub fn run() {
                 *g = Some(active);
             }
             tray::setup(app.handle())?;
-            #[cfg(debug_assertions)]
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
+            if should_show_main_window(first_run, cfg!(debug_assertions)) {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                }
             }
             Ok(())
         })
@@ -146,6 +152,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
+            commands::get_config_status,
+            commands::get_app_info,
             commands::save_config,
             commands::list_subdirs,
             commands::launch_project_cmd,
@@ -198,4 +206,24 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_show_main_window;
+
+    #[test]
+    fn release_shows_main_window_on_first_run() {
+        assert!(should_show_main_window(true, false));
+    }
+
+    #[test]
+    fn release_hides_main_window_after_first_run() {
+        assert!(!should_show_main_window(false, false));
+    }
+
+    #[test]
+    fn debug_always_shows_main_window() {
+        assert!(should_show_main_window(false, true));
+    }
 }

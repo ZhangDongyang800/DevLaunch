@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Project, RepoStatus } from '../types'
-import { relTime, sortProjects } from '../utils'
+import { moveIndex, relTime, sortProjects } from '../utils'
 import {
   branches,
   busy,
@@ -50,6 +50,8 @@ const lastFetchText = computed(() => {
 const repoOpen = ref(false)
 const repoQuery = ref('')
 const repoSearch = ref<HTMLInputElement>()
+const repoTrigger = ref<HTMLButtonElement>()
+const repoActive = ref(0)
 
 // 这里的语义是"最近用过的排前面"，与收藏无关 → 用同一份排序实现、关掉收藏优先。
 const sortedProjects = computed(() => sortProjects(props.projects, false))
@@ -63,16 +65,42 @@ const filteredProjects = computed(() => {
 
 watch(repoOpen, async (open) => {
   if (open) {
+    repoQuery.value = ''
+    repoActive.value = Math.max(0, filteredProjects.value.findIndex((p) => p.id === selectedRepoId.value))
     await nextTick()
     repoSearch.value?.focus()
   }
 })
+
+watch(repoQuery, () => {
+  repoActive.value = 0
+})
+
+function moveRepo(delta: number) {
+  repoActive.value = moveIndex(repoActive.value, delta, filteredProjects.value.length)
+}
+
+function onRepoSearchKeydown(e: KeyboardEvent) {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault()
+    moveRepo(e.key === 'ArrowDown' ? 1 : -1)
+  } else if (e.key === 'Enter') {
+    e.preventDefault()
+    const project = filteredProjects.value[repoActive.value]
+    if (project) pickRepo(project.id)
+  } else if (e.key === 'Escape' || e.key === 'Tab') {
+    e.preventDefault()
+    closeRepo()
+    if (e.key === 'Escape') void nextTick(() => repoTrigger.value?.focus())
+  }
+}
 
 function pickRepo(id: string) {
   selectedRepoId.value = id
   repoOpen.value = false
   repoQuery.value = ''
   void refreshRepo(id)
+  void nextTick(() => repoTrigger.value?.focus())
 }
 
 function closeRepo() {
@@ -248,18 +276,43 @@ async function refreshAll() {
   <div class="git-topbar">
     <div class="gtb-field gtb-repo" @click.stop>
       <span class="gtb-label">仓库</span>
-      <button class="gtb-repo-btn" :title="selected?.rootDir || ''" @click="repoOpen = !repoOpen">
+      <button
+        ref="repoTrigger"
+        class="gtb-repo-btn"
+        :title="selected?.rootDir || ''"
+        aria-haspopup="listbox"
+        :aria-expanded="repoOpen"
+        aria-controls="repo-listbox"
+        @click="repoOpen = !repoOpen"
+      >
         <span class="gtb-repo-name">{{ selected ? (selected.name || '未命名项目') : '选择仓库' }}</span>
         <span class="gb-caret">▾</span>
       </button>
       <div v-if="repoOpen" class="repo-pop">
-        <input ref="repoSearch" v-model="repoQuery" class="mono repo-search" placeholder="搜索名称 / 路径…" spellcheck="false" />
-        <div class="repo-list">
+        <input
+          ref="repoSearch"
+          v-model="repoQuery"
+          class="mono repo-search"
+          placeholder="搜索名称 / 路径…"
+          aria-label="搜索仓库"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls="repo-listbox"
+          :aria-expanded="repoOpen"
+          :aria-activedescendant="filteredProjects.length ? `repo-option-${repoActive}` : undefined"
+          spellcheck="false"
+          @keydown="onRepoSearchKeydown"
+        />
+        <div id="repo-listbox" class="repo-list" role="listbox" aria-label="仓库列表">
           <div
-            v-for="p in filteredProjects"
+            v-for="(p, i) in filteredProjects"
+            :id="`repo-option-${i}`"
             :key="p.id"
             class="repo-item"
-            :class="{ active: p.id === selectedRepoId }"
+            :class="{ active: i === repoActive }"
+            role="option"
+            :aria-selected="p.id === selectedRepoId"
+            @mouseenter="repoActive = i"
             @click="pickRepo(p.id)"
           >
             <div class="repo-item-head">
@@ -312,7 +365,7 @@ async function refreshAll() {
     <span class="mono gtb-label">
       {{ { new: '新建分支', rename: '重命名当前分支', delete: '删除分支', merge: '合并到当前', rebase: '变基当前到' }[mode] }}
     </span>
-    <input v-model="input" class="inline mono" placeholder="分支名" spellcheck="false" @keydown.enter.prevent="submitAction" />
+    <input v-model="input" class="inline mono" placeholder="分支名" aria-label="分支名" spellcheck="false" @keydown.enter.prevent="submitAction" />
     <label v-if="mode === 'new'" class="commit-amend"><input type="checkbox" v-model="checkout" /> 并切换</label>
     <label v-if="mode === 'delete'" class="commit-amend"><input type="checkbox" v-model="force" /> 强制 (-D)</label>
     <button class="primary" @click="submitAction">确定</button>

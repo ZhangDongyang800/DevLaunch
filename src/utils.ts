@@ -1,4 +1,4 @@
-import type { Item, Project } from './types'
+import type { Item, Project, View } from './types'
 
 export function filterProjects(projects: Project[], query: string): Project[] {
   const q = query.trim().toLowerCase()
@@ -25,12 +25,77 @@ export function sortProjects(projects: Project[], favoritesFirst = true): Projec
   })
 }
 
+export function classifyGitStatusError(error: string | null | undefined): {
+  kind: 'none' | 'git' | 'root' | 'other'
+  label: string
+} {
+  const message = error ?? ''
+  if (!message) return { kind: 'none', label: '' }
+  if (message.includes('未找到 git')) return { kind: 'git', label: 'Git 未找到，请在设置中指定 git.exe' }
+  if (message.includes('目录不存在') || message.includes('未设置根目录')) {
+    return { kind: 'root', label: '根目录不可用，请编辑项目路径' }
+  }
+  return { kind: 'other', label: message }
+}
+
 /**
  * 启动项在卡片/面板里的一行标签：优先名称，否则取命令的第一个词。
  * 此前首页与搜索面板各写了一份，改一处不会同步另一处。
  *
  * 注意先 trim 再判空：`('  ' || cmd)` 里空白字符串是**真值**，直接 `||` 会得到空标签。
  */
+export function moveIndex(current: number, delta: number, length: number): number {
+  if (length <= 0) return 0
+  return (current + delta + length) % length
+}
+
+export async function canLeaveView(
+  current: View,
+  next: View,
+  leave?: () => Promise<boolean>,
+  editorMissing = false,
+): Promise<boolean> {
+  if (current.name !== 'editor' || next.name === 'editor' || editorMissing) return true
+  return leave ? leave() : false
+}
+
+export function positionContextMenu(
+  point: { x: number; y: number },
+  anchor: { left: number; top: number; right: number; bottom: number },
+  size: { width: number; height: number },
+  viewport: { width: number; height: number },
+  margin = 8,
+): { x: number; y: number } {
+  const maxX = Math.max(margin, viewport.width - size.width - margin)
+  const maxY = Math.max(margin, viewport.height - size.height - margin)
+  let x = point.x
+  if (x + size.width > viewport.width - margin) x = anchor.right - size.width
+  x = Math.min(Math.max(margin, x), maxX)
+  let y = point.y
+  if (y + size.height > viewport.height - margin) y = anchor.top - size.height
+  y = Math.min(Math.max(margin, y), maxY)
+  return { x, y }
+}
+
+export function isCurrentAsyncResult(token: number, current: number, alive = true): boolean {
+  return alive && token === current
+}
+
+export async function waitForPending(task: Promise<unknown> | null | undefined): Promise<void> {
+  if (task) await task
+}
+
+export function isUncertainGitWriteError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /结果可能已部分生效|输出超过|执行超时/.test(message)
+}
+
+export function markUncertainGitWriteError(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error)
+  if (!isUncertainGitWriteError(error) || message.includes('结果可能已部分生效')) return error
+  return new Error(`${message}；命令结果可能已部分生效`)
+}
+
 export function itemLabel(item: Pick<Item, 'name' | 'command'>): string {
   const name = item.name.trim()
   if (name) return name

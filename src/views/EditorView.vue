@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { config, persist } from '../store'
+import { isCurrentAsyncResult, waitForPending } from '../utils'
+import LaunchMark from '../components/LaunchMark.vue'
 import { detectProject, exportProjectFile, getConfig, launchItem, listSubdirs, readProjectTemplate } from '../api'
 import { newId, newItem, type DetectResult, type Item } from '../types'
 
@@ -15,6 +17,9 @@ const emit = defineEmits<{ back: []; notify: [msg: string, kind?: 'ok' | 'err'] 
 const project = computed(() => config.value!.projects.find((p) => p.id === props.projectId)!)
 const savedSnapshot = ref(JSON.stringify(project.value))
 const dirty = computed(() => JSON.stringify(project.value) !== savedSnapshot.value)
+let alive = true
+let autoImportSeq = 0
+let pendingAutoImport: Promise<void> | null = null
 
 async function save(): Promise<boolean> {
   try {
@@ -28,10 +33,17 @@ async function save(): Promise<boolean> {
   }
 }
 
+async function leave(): Promise<boolean> {
+  await waitForPending(pendingAutoImport)
+  return !dirty.value || await save()
+}
+
 async function goBack() {
-  if (dirty.value && !(await save())) return
+  if (!(await leave())) return
   emit('back')
 }
+
+defineExpose({ leave })
 
 function addItem() {
   project.value.items.push(newItem())
@@ -69,6 +81,8 @@ watch(() => project.value?.rootDir, () => {
 })
 // 离开编辑页后这些定时器还会各打一次 IPC / 改一次状态，结果落回已卸载的组件上
 onUnmounted(() => {
+  alive = false
+  autoImportSeq++
   clearTimeout(subdirsTimer)
   clearTimeout(confirmExportTimer)
 })
@@ -118,10 +132,16 @@ function ensureItemIds(items: Item[]) {
 async function browseRoot() {
   const { open } = await import('@tauri-apps/plugin-dialog')
   const picked = await open({ directory: true, multiple: false })
-  if (typeof picked !== 'string') return
+  if (!alive || typeof picked !== 'string') return
   project.value.rootDir = picked
-  await tryAutoImport()
-  if (project.value.items.length === 0) await runDetect(false)
+  const task = tryAutoImport()
+  pendingAutoImport = task
+  try {
+    await task
+  } finally {
+    if (pendingAutoImport === task) pendingAutoImport = null
+  }
+  if (alive && project.value.items.length === 0) await runDetect(false)
 }
 
 function projectFilePath() {
@@ -130,23 +150,31 @@ function projectFilePath() {
 }
 
 async function tryAutoImport() {
+  const seq = ++autoImportSeq
+  const root = project.value.rootDir
   const path = projectFilePath()
   if (!path || project.value.items.length > 0) return
   try {
     const tpl = await readProjectTemplate(path)
+    if (!isCurrentAsyncResult(seq, autoImportSeq, alive) || project.value.rootDir !== root) return
     if (tpl.items.length > 0) {
+      const { confirm } = await import('@tauri-apps/plugin-dialog')
+      const accepted = await confirm(
+        `在项目根目录发现 devlaunch.json：\n${path}\n\n将导入 ${tpl.items.length} 个启动项。导入后点击运行会执行其中的命令，只继续信任你确认过的文件。`,
+        { title: '信任并导入项目配置', kind: 'warning' },
+      )
+      if (!accepted || !isCurrentAsyncResult(seq, autoImportSeq, alive) || project.value.rootDir !== root) return
       ensureItemIds(tpl.items)
       project.value.name = tpl.name || project.value.name
       project.value.items = tpl.items
       emit(
         'notify',
         tpl.worktree
-          ? '已从项目根目录导入启动项（模板含环境政策段，未应用，请在环境页配置）'
+          ? '已从项目根目录导入启动项（模板含实验性 worktree 政策，本版本未应用）'
           : '已从项目根目录 devlaunch.json 导入启动项',
       )
     }
   } catch {
-    // 没有项目文件时静默
   }
 }
 
@@ -176,6 +204,7 @@ async function runDetect(notifyError: boolean) {
   detecting.value = true
   try {
     const res = await detectProject(root)
+    if (!alive) return
     if (res.suggestions.length === 0) {
       detectResult.value = null
       if (notifyError) emit('notify', '未检测到可生成的启动项')
@@ -244,22 +273,26 @@ async function doExportToRoot() {
 async function doImport() {
   const { open } = await import('@tauri-apps/plugin-dialog')
   const picked = await open({ multiple: false, filters: [{ name: 'JSON', extensions: ['json'] }] })
-  if (typeof picked !== 'string') return
+  if (!alive || typeof picked !== 'string') return
   try {
     const tpl = await readProjectTemplate(picked)
+    if (!alive) return
+    const { confirm } = await import('@tauri-apps/plugin-dialog')
+    const accepted = await confirm(
+      `导入项目配置：\n${picked}\n\n将用其中 ${tpl.items.length} 个启动项替换当前启动项。导入后点击运行会执行其中的命令，只继续信任你确认过的文件。`,
+      { title: '信任并导入项目配置', kind: 'warning' },
+    )
+    if (!accepted || !alive) return
     ensureItemIds(tpl.items)
     project.value.name = tpl.name || project.value.name
     project.value.items = tpl.items
     await persist()
+    if (!alive) return
     savedSnapshot.value = JSON.stringify(project.value)
-    // 模板 v4 可以携带环境政策段（root / copy / portBase / portKey），但导入目前
-    // 只应用 name + items。**必须说出来**：静默丢弃会让用户以为"团队共享的环境
-    // 配置已经带过来了"，然后在环境页看到一个空配置——而 `types.ts` 过去连这个
-    // 字段都没声明，等于连"有没有"都无从判断。
     if (tpl.worktree) {
       emit(
         'notify',
-        '已导入启动项；模板里的环境政策段（根目录 / 复制白名单 / 端口起点）未应用，请在环境页手动配置',
+        '已导入启动项；模板含实验性 worktree 政策，本版本未应用',
       )
     } else {
       emit('notify', '项目配置已导入')
@@ -275,7 +308,7 @@ async function doImport() {
     <div class="editor-head">
       <button class="ghost" @click="goBack">← 返回</button>
       <span v-if="dirty" class="dirty-dot" title="有未保存的更改" />
-      <input v-model="project.name" class="editor-title grow" placeholder="项目名称" />
+      <input v-model="project.name" class="editor-title grow" placeholder="项目名称" aria-label="项目名称" />
       <button class="ghost" title="从项目配置文件导入（覆盖启动项，保留根目录）" @click="doImport">导入</button>
       <button
         class="ghost"
@@ -288,9 +321,9 @@ async function doImport() {
       <button class="primary" @click="save">保存</button>
     </div>
 
-    <div class="pathbar mono">
+    <div class="pathbar editor-location mono">
       <span class="pb-label">ROOT</span>
-      <input class="inline" v-model="project.rootDir" placeholder="D:\Projects\my-app" />
+      <input class="inline" v-model="project.rootDir" placeholder="D:\Projects\my-app" aria-label="项目根目录" />
       <button class="ghost" @click="browseRoot">选择…</button>
       <button class="ghost" :disabled="detecting" @click="runDetect(true)">
         {{ detecting ? '检测中…' : '检测项目' }}
@@ -314,16 +347,19 @@ async function doImport() {
     </div>
 
     <div v-for="(it, ii) in project.items" :key="it.id" class="group">
+      <span class="group-index">{{ String(ii + 1).padStart(2, '0') }}</span>
       <div class="group-head">
-        <span class="group-index">{{ String(ii + 1).padStart(2, '0') }}</span>
-        <input v-model="it.name" class="group-name grow" placeholder="启动项名称（如 后端）" />
-        <select v-model="it.shell" title="高级：命令方言（默认 CMD）">
+        <input v-model="it.name" class="group-name grow" placeholder="启动项名称（如 后端）" :aria-label="`启动项 ${ii + 1} 名称`" />
+        <select v-model="it.shell" :aria-label="`启动项 ${it.name || ii + 1} Shell`" title="高级：命令方言（默认 CMD）">
           <option value="cmd">CMD</option>
           <option value="powershell">PowerShell</option>
           <option value="bash">Git Bash</option>
         </select>
-        <button class="accent" :disabled="runningItemId !== ''" @click="tryRunItem(it)">▶ 运行此项</button>
-        <button class="danger ghost" @click="removeItem(ii)">✕</button>
+        <button class="accent run-item" :aria-label="`运行启动项 ${it.name || ii + 1}`" :disabled="runningItemId !== ''" @click="tryRunItem(it)">
+          <LaunchMark :size="15" />
+          <span>运行此项</span>
+        </button>
+        <button class="danger ghost" :aria-label="`删除启动项 ${it.name || ii + 1}`" title="删除启动项" @click="removeItem(ii)">✕</button>
       </div>
 
       <div class="steps">
@@ -336,6 +372,7 @@ async function doImport() {
                 class="cmd-input"
                 rows="3"
                 placeholder="按平时手动敲的顺序写，一行一条（如 conda activate xingtu 换行 python -m uvicorn main:app --port 8081）"
+                :aria-label="`启动项 ${it.name || ii + 1} 命令`"
                 spellcheck="false"
               />
             </div>
@@ -345,6 +382,7 @@ async function doImport() {
                   class="inline"
                   v-model="it.workDir"
                   placeholder="子目录（留空=根目录）"
+                  :aria-label="`启动项 ${it.name || ii + 1} 工作目录`"
                   @focus="openCombo(it.id)"
                   @blur="closeCombo"
                   @keydown.esc="closeCombo"
@@ -367,8 +405,8 @@ async function doImport() {
                 </div>
               </div>
               <span class="spacer" />
-              <button class="ghost" :disabled="ii === 0" title="上移" @click="moveItem(ii, -1)">↑</button>
-              <button class="ghost" :disabled="ii === project.items.length - 1" title="下移" @click="moveItem(ii, 1)">↓</button>
+              <button class="ghost" :aria-label="`上移启动项 ${it.name || ii + 1}`" :disabled="ii === 0" title="上移" @click="moveItem(ii, -1)">↑</button>
+              <button class="ghost" :aria-label="`下移启动项 ${it.name || ii + 1}`" :disabled="ii === project.items.length - 1" title="下移" @click="moveItem(ii, 1)">↓</button>
             </div>
           </div>
         </div>

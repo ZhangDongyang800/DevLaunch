@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { config, persist } from '../store'
+import { isCurrentAsyncResult } from '../utils'
 import { newId, type DetectedProject, type Project } from '../types'
 import { scanWorkspace } from '../api'
 
@@ -11,6 +12,8 @@ const scanning = ref(false)
 const importing = ref(false)
 const results = ref<DetectedProject[]>([])
 const checked = ref<boolean[]>([])
+const hasScanned = ref(false)
+const scanError = ref('')
 
 /**
  * 扫描是异步 IPC，用户完全可能在它返回前切走这一页。此时再写 ref 会把结果
@@ -21,6 +24,16 @@ let alive = true
 let scanSeq = 0
 onUnmounted(() => {
   alive = false
+  scanSeq++
+})
+
+watch(scanPath, () => {
+  scanSeq++
+  scanning.value = false
+  results.value = []
+  checked.value = []
+  hasScanned.value = false
+  scanError.value = ''
 })
 
 const ecosystemLabels: Record<string, string> = { node: 'Node', rust: 'Rust', go: 'Go', python: 'Python' }
@@ -36,6 +49,8 @@ async function choosePath() {
       scanPath.value = picked
       results.value = []
       checked.value = []
+      hasScanned.value = false
+      scanError.value = ''
     }
   } catch (e) {
     emit('notify', `选择目录失败：${e}`, 'err')
@@ -49,18 +64,23 @@ async function doScan() {
   scanning.value = true
   results.value = []
   checked.value = []
+  hasScanned.value = false
+  scanError.value = ''
   try {
     const found = await scanWorkspace(root)
     // 卸载后到达、或被后一次扫描取代的响应一律丢弃
-    if (!alive || seq !== scanSeq) return
+    if (!isCurrentAsyncResult(seq, scanSeq, alive)) return
     results.value = found
     checked.value = found.map((r) => !r.alreadyImported)
+    hasScanned.value = true
     if (found.length === 0) emit('notify', '未在该目录下发现 git 仓库')
   } catch (e) {
-    if (!alive || seq !== scanSeq) return
+    if (!isCurrentAsyncResult(seq, scanSeq, alive)) return
+    hasScanned.value = true
+    scanError.value = `${e}`
     emit('notify', `扫描失败：${e}`, 'err')
   } finally {
-    if (alive && seq === scanSeq) scanning.value = false
+    if (isCurrentAsyncResult(seq, scanSeq, alive)) scanning.value = false
   }
 }
 
@@ -117,8 +137,8 @@ async function importSelected() {
 
     <div class="pathbar mono">
       <span class="pb-label">DIR</span>
-      <input class="inline" v-model="scanPath" placeholder="D:\Projects" />
-      <button class="ghost" @click="choosePath">选择…</button>
+      <input class="inline" v-model="scanPath" placeholder="D:\Projects" aria-label="扫描目录" :disabled="scanning" />
+      <button class="ghost" :disabled="scanning" @click="choosePath">选择…</button>
       <button class="primary" :disabled="scanning || !scanPath.trim()" @click="doScan">
         {{ scanning ? '扫描中…' : '扫描' }}
       </button>
@@ -139,7 +159,7 @@ async function importSelected() {
         </button>
       </div>
       <div v-for="(r, ri) in results" :key="r.rootDir" class="scan-row" :class="{ disabled: r.alreadyImported }">
-        <input type="checkbox" v-model="checked[ri]" :disabled="r.alreadyImported" />
+        <input type="checkbox" v-model="checked[ri]" :disabled="r.alreadyImported" :aria-label="`导入 ${r.name}`" />
         <div class="scan-info">
           <div class="scan-name">
             {{ r.name }}
@@ -154,7 +174,24 @@ async function importSelected() {
       </div>
     </div>
 
-    <div v-else-if="!scanning && !scanPath.trim()" class="empty-state">
+    <div v-else-if="scanning" class="empty-state">
+      <div class="empty-title">正在扫描…</div>
+      <div class="empty-sub">发现 git 仓库并生成建议启动项</div>
+    </div>
+
+    <div v-else-if="scanError" class="empty-state">
+      <div class="empty-title">扫描失败</div>
+      <div class="empty-sub">{{ scanError }}</div>
+      <button class="primary" @click="doScan">重试</button>
+    </div>
+
+    <div v-else-if="hasScanned" class="empty-state">
+      <div class="empty-title">未发现 Git 仓库</div>
+      <div class="empty-sub">该目录两级以内没有可导入的 Git 仓库，请检查目录或扫描范围</div>
+      <button class="primary" @click="doScan">重新扫描</button>
+    </div>
+
+    <div v-else-if="!scanPath.trim()" class="empty-state">
       <div class="empty-title">扫描工作区</div>
       <div class="empty-sub">选择项目父目录（如 D:\Projects），自动发现两级内的 git 仓库并生成建议启动项</div>
     </div>
